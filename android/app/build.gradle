@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace "com.example.pocketmonk"
+    namespace "app.pocketmonk"
     compileSdk flutter.compileSdkVersion
     ndkVersion "27.0.12077973"
 
@@ -19,7 +19,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.example.pocketmonk"
+        applicationId "app.pocketmonk"
         minSdk 28           // Android 9+ required by fllama / llama.cpp JNI
         targetSdk flutter.targetSdkVersion
         versionCode flutter.versionCode

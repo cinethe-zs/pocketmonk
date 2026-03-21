@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../theme/app_theme.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+
+import '../theme/app_theme.dart';
 
 class ChatInputBar extends StatefulWidget {
   final bool isGenerating;
@@ -20,7 +22,10 @@ class ChatInputBar extends StatefulWidget {
 class _ChatInputBarState extends State<ChatInputBar> {
   final _controller  = TextEditingController();
   final _focusNode   = FocusNode();
+  final _stt         = SpeechToText();
   bool  _hasText     = false;
+  bool  _sttReady    = false;
+  bool  _isListening = false;
 
   @override
   void initState() {
@@ -29,12 +34,19 @@ class _ChatInputBarState extends State<ChatInputBar> {
       final hasText = _controller.text.trim().isNotEmpty;
       if (hasText != _hasText) setState(() => _hasText = hasText);
     });
+    _initStt();
+  }
+
+  Future<void> _initStt() async {
+    final available = await _stt.initialize();
+    if (mounted) setState(() => _sttReady = available);
   }
 
   @override
   void dispose() {
     _controller.dispose();
     _focusNode.dispose();
+    _stt.stop();
     super.dispose();
   }
 
@@ -44,6 +56,31 @@ class _ChatInputBarState extends State<ChatInputBar> {
     widget.onSend(text);
     _controller.clear();
     _focusNode.requestFocus();
+  }
+
+  Future<void> _toggleListening() async {
+    if (_isListening) {
+      await _stt.stop();
+      setState(() => _isListening = false);
+      return;
+    }
+
+    setState(() => _isListening = true);
+    await _stt.listen(
+      onResult: (result) {
+        _controller.text = result.recognizedWords;
+        _controller.selection = TextSelection.fromPosition(
+          TextPosition(offset: _controller.text.length),
+        );
+        if (result.finalResult) {
+          setState(() => _isListening = false);
+        }
+      },
+      listenFor:      const Duration(seconds: 30),
+      pauseFor:       const Duration(seconds: 3),
+      localeId:       'en_US',
+      listenOptions:  SpeechListenOptions(partialResults: true),
+    );
   }
 
   @override
@@ -60,6 +97,16 @@ class _ChatInputBarState extends State<ChatInputBar> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          // Mic button — shown when STT is ready and not currently generating
+          if (_sttReady && !widget.isGenerating)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: _MicButton(
+                isListening: _isListening,
+                onTap:       _toggleListening,
+              ),
+            ),
+
           // Text field
           Expanded(
             child: TextField(
@@ -75,15 +122,17 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 fontSize: 15,
                 height:   1.5,
               ),
-              decoration: const InputDecoration(
-                hintText:       'Ask anything…',
-                hintStyle:      TextStyle(color: AppTheme.textMuted),
+              decoration: InputDecoration(
+                hintText:  _isListening ? 'Listening…' : 'Ask anything…',
+                hintStyle: TextStyle(
+                    color: _isListening ? AppTheme.accent : AppTheme.textMuted),
                 border:         InputBorder.none,
                 enabledBorder:  InputBorder.none,
                 focusedBorder:  InputBorder.none,
                 filled:         true,
                 fillColor:      AppTheme.surfaceRaised,
-                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 12),
               ),
             ),
           ),
@@ -105,6 +154,43 @@ class _ChatInputBarState extends State<ChatInputBar> {
     );
   }
 }
+
+// ── Mic button ────────────────────────────────────────────────────────────────
+
+class _MicButton extends StatelessWidget {
+  final bool isListening;
+  final VoidCallback onTap;
+  const _MicButton({required this.isListening, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      width:  44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: isListening
+            ? AppTheme.accent.withAlpha(30)
+            : AppTheme.surfaceRaised,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isListening ? AppTheme.accent : AppTheme.border,
+        ),
+      ),
+      child: IconButton(
+        onPressed: onTap,
+        icon: Icon(
+          isListening ? Icons.mic_rounded : Icons.mic_none_rounded,
+        ),
+        iconSize: 20,
+        color:   isListening ? AppTheme.accent : AppTheme.textMuted,
+        padding: EdgeInsets.zero,
+      ),
+    );
+  }
+}
+
+// ── Send button ───────────────────────────────────────────────────────────────
 
 class _SendButton extends StatelessWidget {
   final bool enabled;
@@ -132,6 +218,8 @@ class _SendButton extends StatelessWidget {
     );
   }
 }
+
+// ── Stop button ───────────────────────────────────────────────────────────────
 
 class _StopButton extends StatelessWidget {
   final VoidCallback onStop;

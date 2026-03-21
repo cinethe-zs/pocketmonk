@@ -10,8 +10,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
-    <!-- Future: microphone for STT phase -->
-    <!-- <uses-permission android:name="android.permission.RECORD_AUDIO" /> -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:label="PocketMonk"

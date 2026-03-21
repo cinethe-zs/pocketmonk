@@ -1,4 +1,4 @@
-package com.example.pocketmonk
+package app.pocketmonk
 
 import io.flutter.embedding.android.FlutterActivity
 

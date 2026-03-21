@@ -10,7 +10,7 @@ import '../services/llm_service.dart';
 class ChatProvider extends ChangeNotifier {
   LlmService _llm;
 
-  Conversation?     _current;
+  Conversation?      _current;
   List<Conversation> _allConversations = [];
 
   bool    _isGenerating = false;
@@ -21,17 +21,16 @@ class ChatProvider extends ChangeNotifier {
   ChatProvider(this._llm);
 
   // ── Getters ──────────────────────────────────────────────────────────────
-  List<Message>      get messages         => List.unmodifiable(_current?.messages ?? []);
-  bool               get isGenerating     => _isGenerating;
-  bool               get isEmpty          => (_current?.messages ?? []).isEmpty;
-  String?            get errorMessage     => _errorMessage;
-  LlmService         get llm              => _llm;
+  List<Message>      get messages            => List.unmodifiable(_current?.messages ?? []);
+  bool               get isGenerating        => _isGenerating;
+  bool               get isEmpty             => (_current?.messages ?? []).isEmpty;
+  String?            get errorMessage        => _errorMessage;
+  LlmService         get llm                 => _llm;
   Conversation?      get currentConversation => _current;
-  List<Conversation> get allConversations => List.unmodifiable(_allConversations);
+  List<Conversation> get allConversations    => List.unmodifiable(_allConversations);
 
   // ── Bootstrap ─────────────────────────────────────────────────────────────
 
-  /// Load all persisted conversations; resume the most recent one (or start fresh).
   Future<void> init() async {
     _allConversations = await ConversationStore.loadAll();
     if (_allConversations.isNotEmpty) {
@@ -47,7 +46,6 @@ class ChatProvider extends ChangeNotifier {
     _current = Conversation(title: 'New conversation', modelPath: modelPath);
     _errorMessage = null;
     notifyListeners();
-    // Don't save an empty conversation until the first message.
   }
 
   Future<void> loadConversation(Conversation conv) async {
@@ -69,8 +67,62 @@ class ChatProvider extends ChangeNotifier {
   Future<void> _persistCurrent() async {
     if (_current == null) return;
     await ConversationStore.save(_current!);
-    // Refresh the list (update position / updatedAt)
     _allConversations = await ConversationStore.loadAll();
+    notifyListeners();
+  }
+
+  // ── System prompt ─────────────────────────────────────────────────────────
+
+  void setSystemPrompt(String? prompt) {
+    if (_current == null) return;
+    final trimmed = prompt?.trim();
+    _current!.systemPrompt = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+    _persistCurrent();
+    notifyListeners();
+  }
+
+  // ── Tags ──────────────────────────────────────────────────────────────────
+
+  void addTag(String tag) {
+    if (_current == null || tag.trim().isEmpty) return;
+    final t = tag.trim();
+    if (!_current!.tags.contains(t)) {
+      _current!.tags.add(t);
+      _persistCurrent();
+      notifyListeners();
+    }
+  }
+
+  void removeTag(String tag) {
+    if (_current == null) return;
+    _current!.tags.remove(tag);
+    _persistCurrent();
+    notifyListeners();
+  }
+
+  void addTagToConversation(Conversation conv, String tag) {
+    final t = tag.trim();
+    if (t.isEmpty || conv.tags.contains(t)) return;
+    conv.tags.add(t);
+    ConversationStore.save(conv);
+    notifyListeners();
+  }
+
+  void removeTagFromConversation(Conversation conv, String tag) {
+    conv.tags.remove(tag);
+    ConversationStore.save(conv);
+    notifyListeners();
+  }
+
+  // ── Star messages ─────────────────────────────────────────────────────────
+
+  void toggleStarMessage(String messageId) {
+    if (_current == null) return;
+    final idx = _current!.messages.indexWhere((m) => m.id == messageId);
+    if (idx == -1) return;
+    final msg = _current!.messages[idx];
+    _current!.messages[idx] = msg.copyWith(starred: !msg.starred);
+    _persistCurrent();
     notifyListeners();
   }
 
@@ -82,7 +134,6 @@ class ChatProvider extends ChangeNotifier {
 
     _errorMessage = null;
 
-    // Ensure we have a conversation.
     if (_current == null) {
       _current = Conversation(
         title:     _titleFrom(trimmed),
@@ -90,7 +141,6 @@ class ChatProvider extends ChangeNotifier {
       );
     }
 
-    // Auto-title from first user message.
     if (_current!.messages.isEmpty) {
       _current!.title = _titleFrom(trimmed);
     }
@@ -98,6 +148,7 @@ class ChatProvider extends ChangeNotifier {
     final userMsg = Message(role: MessageRole.user, content: trimmed);
     _current!.messages.add(userMsg);
     notifyListeners();
+    _persistCurrent(); // persist user message immediately — crash-safe
 
     final assistantMsg = Message(
       role:    MessageRole.assistant,
@@ -115,7 +166,10 @@ class ChatProvider extends ChangeNotifier {
         .toList();
 
     try {
-      _streamSub = _llm.chat(history).listen(
+      _streamSub = _llm.chat(
+        history,
+        systemPromptOverride: _current?.systemPrompt,
+      ).listen(
         (fullText) {
           _streamBuffer = fullText;
           _updateLastAssistantMessage(_streamBuffer, MessageStatus.streaming);
@@ -126,9 +180,8 @@ class ChatProvider extends ChangeNotifier {
           _persistCurrent();
         },
         onError: (Object e) {
-          final errText = e.toString();
-          _errorMessage = errText;
-          _updateLastAssistantMessage(errText, MessageStatus.error);
+          _errorMessage = e.toString();
+          _updateLastAssistantMessage(e.toString(), MessageStatus.error);
           _finishGeneration();
         },
         cancelOnError: true,
@@ -153,6 +206,42 @@ class ChatProvider extends ChangeNotifier {
     _finishGeneration();
   }
 
+  // ── Regenerate ────────────────────────────────────────────────────────────
+
+  Future<void> regenerateLastResponse() async {
+    if (_isGenerating || _current == null || _current!.messages.isEmpty) return;
+    if (!_current!.messages.last.isAssistant) return;
+
+    // Remove last assistant response
+    _current!.messages.removeLast();
+
+    // Get and remove the last user message (sendMessage will re-add it)
+    if (_current!.messages.isEmpty || !_current!.messages.last.isUser) {
+      notifyListeners();
+      return;
+    }
+    final userText = _current!.messages.last.content;
+    _current!.messages.removeLast();
+    notifyListeners();
+
+    await sendMessage(userText);
+  }
+
+  // ── Edit message ──────────────────────────────────────────────────────────
+
+  Future<void> editMessageAt(int index, String newContent) async {
+    if (_isGenerating || _current == null) return;
+    final trimmed = newContent.trim();
+    if (trimmed.isEmpty) return;
+
+    // Truncate from this index onwards and re-run
+    _current!.messages.removeRange(index, _current!.messages.length);
+    notifyListeners();
+    await sendMessage(trimmed);
+  }
+
+  // ── Clear ─────────────────────────────────────────────────────────────────
+
   void clearHistory() {
     stopGeneration();
     if (_current != null) {
@@ -169,7 +258,6 @@ class ChatProvider extends ChangeNotifier {
   Future<void> switchModel(LlmService newService) async {
     stopGeneration();
     _llm = newService;
-    // Update modelPath on current conversation so future messages use the new model.
     if (_current != null) {
       _current!.modelPath = newService.config?.modelPath ?? '';
     }

@@ -21,7 +21,7 @@ The app is fully functional as a private on-device chat assistant.
 | Storage | 128 GB |
 | GPU | ARM Mali-G710 MP7 |
 | Android | 13+ |
-| Package | `com.example.pocketmonk` |
+| Package | `app.pocketmonk` |
 
 ---
 
@@ -105,7 +105,7 @@ Hosted on Hugging Face (bartowski):
 | Qwen 2.5 3B | `Qwen2.5-3B-Instruct-Q4_K_M.gguf` | `bartowski/Qwen2.5-3B-Instruct-GGUF` |
 
 Models stored at: `getExternalStorageDirectory()/models/`
-Visible in Android Files app under: `Android/data/com.example.pocketmonk/files/models/`
+Visible in Android Files app under: `Android/data/app.pocketmonk/files/models/`
 
 ---
 

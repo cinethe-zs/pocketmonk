@@ -1,19 +1,23 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'llm_service.dart';
 
-const _kModelPathPref = 'model_path';
+const _kModelPathPref      = 'model_path';
+const _kSecondaryModelPref = 'secondary_model_path';
+const _kGpuLayersPref      = 'gpu_layers';
 
-/// Catalogue entry — mirrors model_setup_screen._ModelOption.
+/// Single source of truth for all model catalogue data.
 class ModelCatalogueEntry {
   final String name;
   final String subtitle;
   final String size;
   final String badge;
+  final Color  badgeColor;
   final String filename;
   final String url;
 
@@ -22,52 +26,67 @@ class ModelCatalogueEntry {
     required this.subtitle,
     required this.size,
     required this.badge,
+    required this.badgeColor,
     required this.filename,
     required this.url,
   });
 }
 
+const _accentColor      = Color(0xFF5B8EF0); // AppTheme.accent
+const _greenBadgeColor  = Color(0xFF4CAF50);
+const _orangeBadgeColor = Color(0xFFFF9800);
+
 const modelCatalogue = [
   ModelCatalogueEntry(
-    name:     'Gemma 3 4B',
-    subtitle: 'Google · best quality · great chat & reasoning',
-    size:     '~2.5 GB',
-    badge:    'Recommended',
-    filename: 'google_gemma-3-4b-it-Q4_K_M.gguf',
-    url:      'https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf',
+    name:       'Gemma 3 4B',
+    subtitle:   'Google · best quality · great chat & reasoning',
+    size:       '~2.5 GB',
+    badge:      'Recommended',
+    badgeColor: _accentColor,
+    filename:   'google_gemma-3-4b-it-Q4_K_M.gguf',
+    url:        'https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf',
   ),
   ModelCatalogueEntry(
-    name:     'Phi-4 Mini 3.8B',
-    subtitle: 'Microsoft · strong reasoning · very fast',
-    size:     '~2.5 GB',
-    badge:    'Fast',
-    filename: 'microsoft_Phi-4-mini-instruct-Q4_K_M.gguf',
-    url:      'https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf',
+    name:       'Phi-4 Mini 3.8B',
+    subtitle:   'Microsoft · strong reasoning · very fast',
+    size:       '~2.5 GB',
+    badge:      'Fast',
+    badgeColor: _greenBadgeColor,
+    filename:   'microsoft_Phi-4-mini-instruct-Q4_K_M.gguf',
+    url:        'https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf',
   ),
   ModelCatalogueEntry(
-    name:     'Qwen 2.5 3B',
-    subtitle: 'Alibaba · lightest · minimal RAM usage',
-    size:     '~1.9 GB',
-    badge:    'Light',
-    filename: 'qwen2.5-3b-instruct-q4_k_m.gguf',
-    url:      'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf',
+    name:       'Qwen 2.5 3B',
+    subtitle:   'Alibaba · lightest · minimal RAM usage',
+    size:       '~1.9 GB',
+    badge:      'Light',
+    badgeColor: _orangeBadgeColor,
+    filename:   'Qwen2.5-3B-Instruct-Q4_K_M.gguf',
+    url:        'https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_K_M.gguf',
   ),
 ];
 
 enum DownloadStatus { idle, downloading, done, error }
 
 class ModelManager extends ChangeNotifier {
-  String         _activeModelPath = '';
-  List<String>   _downloadedPaths = [];
+  String       _activeModelPath    = '';
+  String       _secondaryModelPath = '';
+  int          _numGpuLayers       = 0;
+  List<String> _downloadedPaths    = [];
 
   // Per-model download state
-  final Map<String, DownloadStatus> _downloadStatus  = {};
+  final Map<String, DownloadStatus> _downloadStatus   = {};
   final Map<String, double>         _downloadProgress = {};
   final Map<String, String>         _downloadError    = {};
   final Map<String, http.Client>    _downloadClients  = {};
 
-  String         get activeModelPath  => _activeModelPath;
-  List<String>   get downloadedPaths  => List.unmodifiable(_downloadedPaths);
+  String       get activeModelPath    => _activeModelPath;
+  String       get secondaryModelPath => _secondaryModelPath;
+  int          get numGpuLayers       => _numGpuLayers;
+  bool         get hasSecondaryModel  =>
+      _secondaryModelPath.isNotEmpty &&
+      _secondaryModelPath != _activeModelPath;
+  List<String> get downloadedPaths    => List.unmodifiable(_downloadedPaths);
 
   DownloadStatus downloadStatus(String filename) =>
       _downloadStatus[filename] ?? DownloadStatus.idle;
@@ -76,18 +95,24 @@ class ModelManager extends ChangeNotifier {
   String downloadError(String filename) =>
       _downloadError[filename] ?? '';
 
-  String get activeModelName {
+  String _nameFor(String path) {
+    if (path.isEmpty) return '';
     for (final e in modelCatalogue) {
-      if (_activeModelPath.endsWith(e.filename)) return e.name;
+      if (path.endsWith(e.filename)) return e.name;
     }
-    return _activeModelPath.split('/').last;
+    return path.split('/').last;
   }
+
+  String get activeModelName    => _nameFor(_activeModelPath);
+  String get secondaryModelName => _nameFor(_secondaryModelPath);
 
   // ── Init ──────────────────────────────────────────────────────────────────
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    _activeModelPath = prefs.getString(_kModelPathPref) ?? '';
+    _activeModelPath    = prefs.getString(_kModelPathPref)      ?? '';
+    _secondaryModelPath = prefs.getString(_kSecondaryModelPref) ?? '';
+    _numGpuLayers       = prefs.getInt(_kGpuLayersPref)         ?? 0;
     await _scanDownloaded();
     notifyListeners();
   }
@@ -112,6 +137,40 @@ class ModelManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setSecondaryModel(String path) async {
+    _secondaryModelPath = path;
+    final prefs = await SharedPreferences.getInstance();
+    if (path.isEmpty) {
+      await prefs.remove(_kSecondaryModelPref);
+    } else {
+      await prefs.setString(_kSecondaryModelPref, path);
+    }
+    notifyListeners();
+  }
+
+  /// Swaps active ↔ secondary in preferences. Returns the new active path.
+  Future<String> swapModels() async {
+    if (_secondaryModelPath.isEmpty) return _activeModelPath;
+    final newActive    = _secondaryModelPath;
+    final newSecondary = _activeModelPath;
+    _activeModelPath    = newActive;
+    _secondaryModelPath = newSecondary;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kModelPathPref,      _activeModelPath);
+    await prefs.setString(_kSecondaryModelPref, _secondaryModelPath);
+    notifyListeners();
+    return newActive;
+  }
+
+  // ── GPU layers ────────────────────────────────────────────────────────────
+
+  Future<void> setNumGpuLayers(int layers) async {
+    _numGpuLayers = layers;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kGpuLayersPref, layers);
+    notifyListeners();
+  }
+
   // ── Download ──────────────────────────────────────────────────────────────
 
   Future<void> startDownload(ModelCatalogueEntry entry) async {
@@ -131,7 +190,8 @@ class ModelManager extends ChangeNotifier {
       await tmpFile.parent.create(recursive: true);
       final client   = http.Client();
       _downloadClients[entry.filename] = client;
-      final response = await client.send(http.Request('GET', Uri.parse(entry.url)));
+      final response = await client.send(
+          http.Request('GET', Uri.parse(entry.url)));
 
       if (response.statusCode != 200) {
         throw Exception('Server returned ${response.statusCode}');
@@ -184,11 +244,17 @@ class ModelManager extends ChangeNotifier {
   Future<void> deleteModel(String path) async {
     final file = File(path);
     if (await file.exists()) await file.delete();
+
+    final prefs = await SharedPreferences.getInstance();
     if (_activeModelPath == path) {
       _activeModelPath = '';
-      final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_kModelPathPref);
     }
+    if (_secondaryModelPath == path) {
+      _secondaryModelPath = '';
+      await prefs.remove(_kSecondaryModelPref);
+    }
+
     await _scanDownloaded();
     notifyListeners();
   }

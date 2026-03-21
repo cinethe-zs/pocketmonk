@@ -10,12 +10,14 @@ class Message {
   String content;
   MessageStatus status;
   final DateTime createdAt;
+  bool starred;
 
   Message({
     String? id,
     required this.role,
     required this.content,
     this.status = MessageStatus.done,
+    this.starred = false,
     DateTime? createdAt,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
@@ -25,12 +27,13 @@ class Message {
   bool get isStreaming => status == MessageStatus.streaming;
   bool get isError     => status == MessageStatus.error;
 
-  Message copyWith({String? content, MessageStatus? status}) {
+  Message copyWith({String? content, MessageStatus? status, bool? starred}) {
     return Message(
-      id: id,
-      role: role,
-      content: content ?? this.content,
-      status: status ?? this.status,
+      id:        id,
+      role:      role,
+      content:   content ?? this.content,
+      status:    status  ?? this.status,
+      starred:   starred ?? this.starred,
       createdAt: createdAt,
     );
   }
@@ -40,6 +43,7 @@ class Message {
     'role':      role.name,
     'content':   content,
     'status':    status.name,
+    'starred':   starred,
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -48,6 +52,7 @@ class Message {
     role:      MessageRole.values.byName(j['role'] as String),
     content:   j['content'] as String,
     status:    MessageStatus.values.byName(j['status'] as String? ?? 'done'),
+    starred:   j['starred'] as bool? ?? false,
     createdAt: DateTime.parse(j['createdAt'] as String),
   );
 }

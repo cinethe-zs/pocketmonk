@@ -5,59 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../services/llm_service.dart';
+import '../services/model_manager.dart';
 import '../theme/app_theme.dart';
-
-// ── Model catalogue ───────────────────────────────────────────────────────────
-
-class _ModelOption {
-  final String name;
-  final String subtitle;
-  final String size;
-  final String badge;
-  final Color  badgeColor;
-  final String filename;
-  final String url;
-
-  const _ModelOption({
-    required this.name,
-    required this.subtitle,
-    required this.size,
-    required this.badge,
-    required this.badgeColor,
-    required this.filename,
-    required this.url,
-  });
-}
-
-const _models = [
-  _ModelOption(
-    name:       'Gemma 3 4B',
-    subtitle:   'Google · best quality · great chat & reasoning',
-    size:       '~2.5 GB',
-    badge:      'Recommended',
-    badgeColor: AppTheme.accent,
-    filename:   'google_gemma-3-4b-it-Q4_K_M.gguf',
-    url:        'https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf',
-  ),
-  _ModelOption(
-    name:       'Phi-4 Mini 3.8B',
-    subtitle:   'Microsoft · strong reasoning · very fast',
-    size:       '~2.5 GB',
-    badge:      'Fast',
-    badgeColor: Color(0xFF4CAF50),
-    filename:   'microsoft_Phi-4-mini-instruct-Q4_K_M.gguf',
-    url:        'https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf',
-  ),
-  _ModelOption(
-    name:       'Qwen 2.5 3B',
-    subtitle:   'Alibaba · lightest · minimal RAM usage',
-    size:       '~1.9 GB',
-    badge:      'Light',
-    badgeColor: Color(0xFFFF9800),
-    filename:   'qwen2.5-3b-instruct-q4_k_m.gguf',
-    url:        'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf',
-  ),
-];
 
 // ── Download state ────────────────────────────────────────────────────────────
 
@@ -94,7 +43,7 @@ class _ModelSetupScreenState extends State<ModelSetupScreen> {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
-  _ModelOption get _selected => _models[_selectedIndex];
+  ModelCatalogueEntry get _selected => modelCatalogue[_selectedIndex];
 
   Future<String> get _modelPath async =>
       LlmService.pathForModel(_selected.filename);
@@ -260,8 +209,8 @@ class _ModelSetupScreenState extends State<ModelSetupScreen> {
 
               const SizedBox(height: 10),
 
-              ...List.generate(_models.length, (i) {
-                final m = _models[i];
+              ...List.generate(modelCatalogue.length, (i) {
+                final m = modelCatalogue[i];
                 final selected = i == _selectedIndex;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 10),
