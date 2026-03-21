@@ -157,6 +157,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (conv?.systemPrompt != null)
                   TextButton(
                     onPressed: () {
+                      FocusScope.of(ctx).unfocus();
                       Navigator.pop(ctx);
                       chat.setSystemPrompt(null);
                     },
@@ -166,7 +167,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 const Spacer(),
                 TextButton(
-                  onPressed: () => Navigator.pop(ctx),
+                  onPressed: () {
+                    FocusScope.of(ctx).unfocus();
+                    Navigator.pop(ctx);
+                  },
                   child: const Text('Cancel',
                       style: TextStyle(
                           color: AppTheme.textSecondary)),
@@ -174,6 +178,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 const SizedBox(width: 8),
                 ElevatedButton(
                   onPressed: () {
+                    FocusScope.of(ctx).unfocus();
                     Navigator.pop(ctx);
                     chat.setSystemPrompt(controller.text);
                   },
