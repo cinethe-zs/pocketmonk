@@ -96,7 +96,7 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (ctx) => Padding(
         padding: EdgeInsets.fromLTRB(
           20, 16, 20,
-          20 + MediaQuery.of(ctx).viewInsets.bottom,
+          20 + MediaQuery.of(context).viewInsets.bottom,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -666,7 +666,7 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
         builder: (ctx, setSheetState) => Padding(
           padding: EdgeInsets.fromLTRB(
               20, 16, 20,
-              20 + MediaQuery.of(ctx).viewInsets.bottom),
+              20 + MediaQuery.of(context).viewInsets.bottom),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
