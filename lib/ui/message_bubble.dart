@@ -10,6 +10,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onRegenerate;
   final void Function(String newContent)? onEdit;
   final VoidCallback? onToggleStar;
+  final VoidCallback? onFork;
 
   const MessageBubble({
     super.key,
@@ -17,6 +18,7 @@ class MessageBubble extends StatelessWidget {
     this.onRegenerate,
     this.onEdit,
     this.onToggleStar,
+    this.onFork,
   });
 
   @override
@@ -26,6 +28,7 @@ class MessageBubble extends StatelessWidget {
             message:      message,
             onEdit:       onEdit,
             onToggleStar: onToggleStar,
+            onFork:       onFork,
           )
         : _AssistantBubble(
             message:      message,
@@ -40,8 +43,9 @@ class MessageBubble extends StatelessWidget {
 void _showMessageMenu(
   BuildContext context, {
   required Message message,
-  VoidCallback? onEdit,
+  void Function(String)? onEdit,
   VoidCallback? onToggleStar,
+  VoidCallback? onFork,
 }) {
   showModalBottomSheet(
     context:           context,
@@ -111,6 +115,19 @@ void _showMessageMenu(
             },
           ),
 
+          // Fork from here
+          if (onFork != null)
+            ListTile(
+              leading: const Icon(Icons.fork_right_rounded,
+                  color: AppTheme.textMuted),
+              title: const Text('Fork from here',
+                  style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+              onTap: () {
+                Navigator.pop(context);
+                onFork();
+              },
+            ),
+
           const SizedBox(height: 8),
         ],
       ),
@@ -179,11 +196,13 @@ class _UserBubble extends StatelessWidget {
   final Message message;
   final void Function(String)? onEdit;
   final VoidCallback? onToggleStar;
+  final VoidCallback? onFork;
 
   const _UserBubble({
     required this.message,
     this.onEdit,
     this.onToggleStar,
+    this.onFork,
   });
 
   @override
@@ -203,6 +222,7 @@ class _UserBubble extends StatelessWidget {
                     ? (text) => onEdit!(text)
                     : null,
                 onToggleStar: onToggleStar,
+                onFork:       onFork,
               ),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

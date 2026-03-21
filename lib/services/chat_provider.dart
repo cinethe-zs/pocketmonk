@@ -29,6 +29,18 @@ class ChatProvider extends ChangeNotifier {
   Conversation?      get currentConversation => _current;
   List<Conversation> get allConversations    => List.unmodifiable(_allConversations);
 
+  int get contextLength => _llm.config?.contextLength ?? 4096;
+
+  /// Rough token estimate: ~4 chars per token (English average).
+  int get estimatedTokenCount {
+    if (_current == null) return 0;
+    int chars = 0;
+    for (final m in _current!.messages) {
+      chars += m.content.length;
+    }
+    return (chars / 4).round();
+  }
+
   // ── Bootstrap ─────────────────────────────────────────────────────────────
 
   Future<void> init() async {
@@ -178,6 +190,11 @@ class ChatProvider extends ChangeNotifier {
           _updateLastAssistantMessage(_streamBuffer, MessageStatus.done);
           _finishGeneration();
           _persistCurrent();
+          // Auto-title after the very first exchange
+          final userMsgs = _current!.messages.where((m) => m.isUser).toList();
+          if (userMsgs.length == 1 && _streamBuffer.isNotEmpty) {
+            _autoGenerateTitle(userMsgs.first.content, _streamBuffer);
+          }
         },
         onError: (Object e) {
           _errorMessage = e.toString();
@@ -240,6 +257,33 @@ class ChatProvider extends ChangeNotifier {
     await sendMessage(trimmed);
   }
 
+  // ── Fork conversation ─────────────────────────────────────────────────────
+
+  Future<void> forkConversationAt(int messageIndex) async {
+    if (_current == null) return;
+    stopGeneration();
+
+    final forkedMessages = _current!.messages
+        .take(messageIndex + 1)
+        .map((m) => m.copyWith())
+        .toList();
+
+    final baseTitle = _current!.title;
+    final fork = Conversation(
+      title:        'Fork: $baseTitle',
+      modelPath:    _current!.modelPath,
+      systemPrompt: _current!.systemPrompt,
+      tags:         List<String>.from(_current!.tags),
+      messages:     forkedMessages,
+    );
+
+    await ConversationStore.save(fork);
+    _allConversations = await ConversationStore.loadAll();
+    _current      = fork;
+    _errorMessage = null;
+    notifyListeners();
+  }
+
   // ── Clear ─────────────────────────────────────────────────────────────────
 
   void clearHistory() {
@@ -278,6 +322,24 @@ class ChatProvider extends ChangeNotifier {
   void _finishGeneration() {
     _isGenerating = false;
     _streamSub    = null;
+    notifyListeners();
+  }
+
+  Future<void> _autoGenerateTitle(
+      String userMsg, String assistantMsg) async {
+    final convId = _current?.id;
+    final title  = await _llm.generateTitle(userMsg, assistantMsg);
+    if (title == null || title.isEmpty) return;
+    // Make sure we're still on the same conversation
+    final conv = _allConversations.firstWhere(
+      (c) => c.id == convId,
+      orElse: () => _current ?? Conversation(title: '', modelPath: ''),
+    );
+    if (conv.id != convId) return;
+    conv.title = title;
+    if (_current?.id == convId) _current!.title = title;
+    await ConversationStore.save(conv);
+    _allConversations = await ConversationStore.loadAll();
     notifyListeners();
   }
 

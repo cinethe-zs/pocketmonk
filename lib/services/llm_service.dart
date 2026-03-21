@@ -205,6 +205,57 @@ class LlmService {
         lower.contains('gpu layer') && lower.contains('fail');
   }
 
+  // ── Title generation ──────────────────────────────────────────────────────
+
+  /// Runs a tiny inference to produce a 4-6 word title from the first exchange.
+  /// Returns null if the model is busy or inference fails.
+  Future<String?> generateTitle(
+      String firstUserMsg, String firstAssistantMsg) async {
+    if (_config == null || _status == LlmServiceStatus.inferring) return null;
+
+    final messages = [
+      Message(
+        Role.system,
+        'Generate a short title of 4-6 words for the conversation below. '
+        'Respond with ONLY the title. No punctuation, no quotes, no explanation.',
+      ),
+      Message(Role.user, firstUserMsg.length > 300
+          ? firstUserMsg.substring(0, 300)
+          : firstUserMsg),
+      Message(Role.assistant, firstAssistantMsg.length > 300
+          ? firstAssistantMsg.substring(0, 300)
+          : firstAssistantMsg),
+      Message(Role.user, 'Title:'),
+    ];
+
+    final request = OpenAiRequest(
+      maxTokens:        16,
+      messages:         messages,
+      tools:            [],
+      modelPath:        _config!.modelPath,
+      numGpuLayers:     0,
+      contextSize:      512,
+      temperature:      0.3,
+      topP:             0.9,
+      frequencyPenalty: 0.0,
+      presencePenalty:  0.0,
+    );
+
+    final completer = Completer<String?>();
+    String result   = '';
+    try {
+      fllamaChat(request, (response, _, done) {
+        result = response.trim().replaceAll('"', '').replaceAll("'", '');
+        if (done && !completer.isCompleted) completer.complete(result);
+      });
+      return await completer.future
+          .timeout(const Duration(seconds: 15), onTimeout: () => null);
+    } catch (_) {
+      if (!completer.isCompleted) completer.complete(null);
+      return null;
+    }
+  }
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   void cancel() {

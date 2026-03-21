@@ -137,12 +137,19 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ? (newContent) =>
                                     chat.editMessageAt(i, newContent)
                                 : null,
+                            onFork: msg.isUser && !chat.isGenerating
+                                ? () => chat.forkConversationAt(i)
+                                : null,
                           );
                         },
                       ),
               ),
               if (chat.errorMessage != null)
                 _ErrorBanner(message: chat.errorMessage!),
+              _ContextBar(
+                used:  chat.estimatedTokenCount,
+                total: chat.contextLength,
+              ),
               ChatInputBar(
                 isGenerating: chat.isGenerating,
                 onSend:       chat.sendMessage,
@@ -1034,6 +1041,51 @@ class _SuggestionChips extends StatelessWidget {
                 onPressed: () => chat.sendMessage(s),
               ))
           .toList(),
+    );
+  }
+}
+
+// ── Context usage bar ─────────────────────────────────────────────────────────
+
+class _ContextBar extends StatelessWidget {
+  final int used;
+  final int total;
+
+  const _ContextBar({required this.used, required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    final ratio = total > 0 ? (used / total).clamp(0.0, 1.0) : 0.0;
+    if (ratio < 0.1) return const SizedBox.shrink();
+
+    final color = ratio > 0.85
+        ? AppTheme.error
+        : ratio > 0.60
+            ? Colors.amber
+            : AppTheme.success;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                value:            ratio,
+                minHeight:        3,
+                backgroundColor:  AppTheme.border,
+                valueColor:       AlwaysStoppedAnimation<Color>(color),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '~$used / $total tokens',
+            style: TextStyle(color: color, fontSize: 10),
+          ),
+        ],
+      ),
     );
   }
 }
