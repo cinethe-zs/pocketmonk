@@ -86,43 +86,24 @@ class _ChatScreenState extends State<ChatScreen> {
     final controller =
         TextEditingController(text: conv?.systemPrompt ?? '');
 
-    showModalBottomSheet(
-      context:         context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.fromLTRB(
-          20, 16, 20,
-          20 + MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Column(
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
+        title: const Text('System Prompt',
+            style: TextStyle(
+                color:      AppTheme.textPrimary,
+                fontSize:   16,
+                fontWeight: FontWeight.w700)),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Handle
-            Center(
-              child: Container(
-                width: 36, height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: AppTheme.border,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const Text('System Prompt',
-                style: TextStyle(
-                    color:      AppTheme.textPrimary,
-                    fontSize:   16,
-                    fontWeight: FontWeight.w700)),
-            const SizedBox(height: 6),
-            Text(
+            const Text(
               'Overrides the default prompt for this conversation only.',
-              style: const TextStyle(
-                  color: AppTheme.textMuted, fontSize: 12),
+              style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
             ),
             const SizedBox(height: 14),
             TextField(
@@ -140,7 +121,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 fillColor: AppTheme.surfaceRaised,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: AppTheme.border),
+                  borderSide:
+                      const BorderSide(color: AppTheme.border),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
@@ -150,52 +132,34 @@ class _ChatScreenState extends State<ChatScreen> {
                 contentPadding: const EdgeInsets.all(12),
               ),
             ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                // Clear
-                if (conv?.systemPrompt != null)
-                  TextButton(
-                    onPressed: () {
-                      FocusScope.of(ctx).unfocus();
-                      Navigator.pop(ctx);
-                      chat.setSystemPrompt(null);
-                    },
-                    child: const Text('Reset to default',
-                        style:
-                            TextStyle(color: AppTheme.textMuted)),
-                  ),
-                const Spacer(),
-                TextButton(
-                  onPressed: () {
-                    FocusScope.of(ctx).unfocus();
-                    Navigator.pop(ctx);
-                  },
-                  child: const Text('Cancel',
-                      style: TextStyle(
-                          color: AppTheme.textSecondary)),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () {
-                    FocusScope.of(ctx).unfocus();
-                    Navigator.pop(ctx);
-                    chat.setSystemPrompt(controller.text);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.accent,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                    elevation: 0,
-                  ),
-                  child: const Text('Save',
-                      style: TextStyle(fontWeight: FontWeight.w600)),
-                ),
-              ],
-            ),
           ],
         ),
+        actions: [
+          if (conv?.systemPrompt != null)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                chat.setSystemPrompt(null);
+              },
+              child: const Text('Reset',
+                  style: TextStyle(color: AppTheme.textMuted)),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppTheme.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              chat.setSystemPrompt(controller.text);
+            },
+            child: const Text('Save',
+                style: TextStyle(
+                    color:      AppTheme.accent,
+                    fontWeight: FontWeight.w600)),
+          ),
+        ],
       ),
     ).then((_) => controller.dispose());
   }
