@@ -93,6 +93,7 @@ class LlmService {
   Stream<String> chat(
     List<Map<String, String>> history, {
     String? systemPromptOverride,
+    String? contextSummary,
   }) {
     if (_config == null) {
       return Stream.error('LLM not initialised. Call initialize() first.');
@@ -103,8 +104,13 @@ class LlmService {
     _gpuFallback = false;
     _status      = LlmServiceStatus.inferring;
 
+    var sysPrompt = systemPromptOverride ?? _systemPrompt;
+    if (contextSummary != null && contextSummary.isNotEmpty) {
+      sysPrompt += '\n\n[Summary of earlier conversation: $contextSummary]';
+    }
+
     final messages = <Message>[
-      Message(Role.system, systemPromptOverride ?? _systemPrompt),
+      Message(Role.system, sysPrompt),
       ...history.map((m) {
         final role = m['role'] == 'user' ? Role.user : Role.assistant;
         return Message(role, m['content']!);
@@ -113,6 +119,54 @@ class LlmService {
 
     _infer(messages, controller);
     return controller.stream;
+  }
+
+  /// Asks the LLM to produce a compact summary of [messages].
+  Future<String?> summarizeHistory(
+      List<Map<String, String>> messages) async {
+    if (_config == null || _status == LlmServiceStatus.inferring) return null;
+
+    final buf = StringBuffer();
+    for (final m in messages) {
+      final role = m['role'] == 'user' ? 'User' : 'Assistant';
+      buf.writeln('$role: ${m['content']}');
+      buf.writeln();
+    }
+
+    final request = OpenAiRequest(
+      maxTokens:        300,
+      messages:         [
+        Message(
+          Role.system,
+          'You are a conversation summarizer. Write a concise summary '
+          '(2-4 sentences) of the conversation below. Focus on key topics, '
+          'decisions, and facts. Start directly with the summary.',
+        ),
+        Message(Role.user, buf.toString()),
+      ],
+      tools:            [],
+      modelPath:        _config!.modelPath,
+      numGpuLayers:     0,
+      contextSize:      2048,
+      temperature:      0.3,
+      topP:             0.9,
+      frequencyPenalty: 0.0,
+      presencePenalty:  0.0,
+    );
+
+    final completer = Completer<String?>();
+    String result   = '';
+    try {
+      fllamaChat(request, (response, _, done) {
+        result = response.trim();
+        if (done && !completer.isCompleted) completer.complete(result);
+      });
+      return await completer.future
+          .timeout(const Duration(seconds: 30), onTimeout: () => null);
+    } catch (_) {
+      if (!completer.isCompleted) completer.complete(null);
+      return null;
+    }
   }
 
   Future<void> _infer(

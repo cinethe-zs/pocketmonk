@@ -147,8 +147,13 @@ class _ChatScreenState extends State<ChatScreen> {
               if (chat.errorMessage != null)
                 _ErrorBanner(message: chat.errorMessage!),
               _ContextBar(
-                used:  chat.estimatedTokenCount,
-                total: chat.contextLength,
+                used:          chat.estimatedTokenCount,
+                total:         chat.contextLength,
+                isCompressing: chat.isCompressing,
+                canCompress:   !chat.isEmpty &&
+                    !chat.isGenerating &&
+                    chat.messages.length > 6,
+                onCompress:    () => chat.compressContext(),
               ),
               ChatInputBar(
                 isGenerating: chat.isGenerating,
@@ -1048,15 +1053,24 @@ class _SuggestionChips extends StatelessWidget {
 // ── Context usage bar ─────────────────────────────────────────────────────────
 
 class _ContextBar extends StatelessWidget {
-  final int used;
-  final int total;
+  final int          used;
+  final int          total;
+  final bool         isCompressing;
+  final bool         canCompress;
+  final VoidCallback onCompress;
 
-  const _ContextBar({required this.used, required this.total});
+  const _ContextBar({
+    required this.used,
+    required this.total,
+    required this.isCompressing,
+    required this.canCompress,
+    required this.onCompress,
+  });
 
   @override
   Widget build(BuildContext context) {
     final ratio = total > 0 ? (used / total).clamp(0.0, 1.0) : 0.0;
-    if (ratio < 0.1) return const SizedBox.shrink();
+    if (ratio < 0.1 && !isCompressing) return const SizedBox.shrink();
 
     final color = ratio > 0.85
         ? AppTheme.error
@@ -1072,10 +1086,10 @@ class _ContextBar extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
-                value:            ratio,
-                minHeight:        3,
-                backgroundColor:  AppTheme.border,
-                valueColor:       AlwaysStoppedAnimation<Color>(color),
+                value:           ratio,
+                minHeight:       3,
+                backgroundColor: AppTheme.border,
+                valueColor:      AlwaysStoppedAnimation<Color>(color),
               ),
             ),
           ),
@@ -1084,6 +1098,39 @@ class _ContextBar extends StatelessWidget {
             '~$used / $total tokens',
             style: TextStyle(color: color, fontSize: 10),
           ),
+          if (isCompressing) ...[
+            const SizedBox(width: 8),
+            const SizedBox(
+              width: 10, height: 10,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                valueColor: AlwaysStoppedAnimation<Color>(AppTheme.accent),
+              ),
+            ),
+          ] else if (canCompress && ratio > 0.50) ...[
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: onCompress,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color:        AppTheme.accentDim,
+                  borderRadius: BorderRadius.circular(4),
+                  border:       Border.all(
+                      color: AppTheme.accent.withAlpha(120)),
+                ),
+                child: const Text(
+                  'Compress',
+                  style: TextStyle(
+                    color:      AppTheme.accent,
+                    fontSize:   10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

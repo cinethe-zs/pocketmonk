@@ -172,8 +172,15 @@ class ChatProvider extends ChangeNotifier {
     _streamBuffer = '';
     notifyListeners();
 
+    // Extract any compressed summary to inject into the system prompt.
+    final summaryContent = _current!.messages
+        .where((m) => m.isSummary)
+        .map((m) => m.content)
+        .join('\n\n');
+
     final history = _current!.messages
-        .where((m) => m.isUser || (m.isAssistant && m.content.isNotEmpty))
+        .where((m) => !m.isSummary &&
+            (m.isUser || (m.isAssistant && m.content.isNotEmpty)))
         .map((m) => {'role': m.isUser ? 'user' : 'assistant', 'content': m.content})
         .toList();
 
@@ -181,6 +188,7 @@ class ChatProvider extends ChangeNotifier {
       _streamSub = _llm.chat(
         history,
         systemPromptOverride: _current?.systemPrompt,
+        contextSummary: summaryContent.isEmpty ? null : summaryContent,
       ).listen(
         (fullText) {
           _streamBuffer = fullText;
@@ -255,6 +263,72 @@ class ChatProvider extends ChangeNotifier {
     _current!.messages.removeRange(index, _current!.messages.length);
     notifyListeners();
     await sendMessage(trimmed);
+  }
+
+  // ── Context compression ───────────────────────────────────────────────────
+
+  bool _isCompressing = false;
+  bool get isCompressing => _isCompressing;
+
+  /// Summarises messages older than the last [keepLast] turns and replaces
+  /// them with a single summary card, shrinking the effective context.
+  Future<void> compressContext({int keepLast = 4}) async {
+    if (_current == null || _isGenerating || _isCompressing) return;
+
+    final msgs = _current!.messages;
+    // Need enough history to be worth compressing.
+    if (msgs.length <= keepLast + 2) return;
+
+    _isCompressing = true;
+    notifyListeners();
+
+    // Separate existing summaries from real turns.
+    final prevSummary = msgs
+        .where((m) => m.isSummary)
+        .map((m) => m.content)
+        .join('\n\n');
+    final realMsgs = msgs.where((m) => !m.isSummary).toList();
+
+    final toSummarise = realMsgs.take(realMsgs.length - keepLast).toList();
+    final toKeep      = realMsgs.skip(realMsgs.length - keepLast).toList();
+
+    // Build history for summarisation (include previous summary as prefix).
+    final history = <Map<String, String>>[];
+    if (prevSummary.isNotEmpty) {
+      history.add({'role': 'user',      'content': '[Earlier summary] $prevSummary'});
+      history.add({'role': 'assistant', 'content': 'Understood.'});
+    }
+    for (final m in toSummarise) {
+      if (m.isUser || (m.isAssistant && m.content.isNotEmpty)) {
+        history.add({
+          'role':    m.isUser ? 'user' : 'assistant',
+          'content': m.content,
+        });
+      }
+    }
+
+    final summary = await _llm.summarizeHistory(history);
+
+    _isCompressing = false;
+
+    if (summary == null || summary.isEmpty) {
+      notifyListeners();
+      return;
+    }
+
+    final summaryMsg = Message(
+      role:      MessageRole.assistant,
+      content:   summary,
+      isSummary: true,
+    );
+
+    _current!.messages
+      ..clear()
+      ..add(summaryMsg)
+      ..addAll(toKeep);
+
+    await _persistCurrent();
+    notifyListeners();
   }
 
   // ── Fork conversation ─────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (message.isSummary) return _SummaryCard(message: message);
     return message.isUser
         ? _UserBubble(
             message:      message,
@@ -488,6 +489,78 @@ class _CopyButtonState extends State<_CopyButton> {
         _copied ? Icons.check_rounded : Icons.copy_rounded,
         color: _copied ? AppTheme.success : AppTheme.textMuted,
         size:  16,
+      ),
+    );
+  }
+}
+
+// ── Summary card ──────────────────────────────────────────────────────────────
+
+class _SummaryCard extends StatefulWidget {
+  final Message message;
+  const _SummaryCard({required this.message});
+
+  @override
+  State<_SummaryCard> createState() => _SummaryCardState();
+}
+
+class _SummaryCardState extends State<_SummaryCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: GestureDetector(
+        onTap: () => setState(() => _expanded = !_expanded),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceRaised,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppTheme.accent.withAlpha(80)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.compress_rounded,
+                      size: 13, color: AppTheme.accent),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Context compressed',
+                    style: TextStyle(
+                      color:      AppTheme.accent,
+                      fontSize:   12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    _expanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 14,
+                    color: AppTheme.textMuted,
+                  ),
+                ],
+              ),
+              if (_expanded) ...[
+                const SizedBox(height: 8),
+                Text(
+                  widget.message.content,
+                  style: const TextStyle(
+                    color:    AppTheme.textSecondary,
+                    fontSize: 12,
+                    height:   1.5,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

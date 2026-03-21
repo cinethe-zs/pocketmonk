@@ -11,6 +11,7 @@ class Message {
   MessageStatus status;
   final DateTime createdAt;
   bool starred;
+  bool isSummary;   // true = compressed context card, not a real turn
 
   Message({
     String? id,
@@ -18,6 +19,7 @@ class Message {
     required this.content,
     this.status = MessageStatus.done,
     this.starred = false,
+    this.isSummary = false,
     DateTime? createdAt,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
@@ -34,6 +36,7 @@ class Message {
       content:   content ?? this.content,
       status:    status  ?? this.status,
       starred:   starred ?? this.starred,
+      isSummary: isSummary,
       createdAt: createdAt,
     );
   }
@@ -44,6 +47,7 @@ class Message {
     'content':   content,
     'status':    status.name,
     'starred':   starred,
+    if (isSummary) 'isSummary': true,
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -53,6 +57,7 @@ class Message {
     content:   j['content'] as String,
     status:    MessageStatus.values.byName(j['status'] as String? ?? 'done'),
     starred:   j['starred'] as bool? ?? false,
+    isSummary: j['isSummary'] as bool? ?? false,
     createdAt: DateTime.parse(j['createdAt'] as String),
   );
 }
