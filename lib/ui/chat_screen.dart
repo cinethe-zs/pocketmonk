@@ -27,6 +27,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
   final _scaffoldKey      = GlobalKey<ScaffoldState>();
+  bool  _promptExpanded   = false;
 
   @override
   void dispose() {
@@ -81,88 +82,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _showSystemPromptSheet(BuildContext context, ChatProvider chat) {
-    final conv = chat.currentConversation;
-    final controller =
-        TextEditingController(text: conv?.systemPrompt ?? '');
-
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
-        title: const Text('System Prompt',
-            style: TextStyle(
-                color:      AppTheme.textPrimary,
-                fontSize:   16,
-                fontWeight: FontWeight.w700)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Overrides the default prompt for this conversation only.',
-              style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: controller,
-              autofocus:  true,
-              maxLines:   6,
-              minLines:   3,
-              style: const TextStyle(
-                  color: AppTheme.textPrimary, fontSize: 14),
-              decoration: InputDecoration(
-                hintText:  'You are a helpful assistant…',
-                hintStyle: const TextStyle(
-                    color: AppTheme.textMuted, fontSize: 13),
-                filled:    true,
-                fillColor: AppTheme.surfaceRaised,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide:
-                      const BorderSide(color: AppTheme.border),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide:
-                      const BorderSide(color: AppTheme.accent),
-                ),
-                contentPadding: const EdgeInsets.all(12),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          if (conv?.systemPrompt != null)
-            TextButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                chat.setSystemPrompt(null);
-              },
-              child: const Text('Reset',
-                  style: TextStyle(color: AppTheme.textMuted)),
-            ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel',
-                style: TextStyle(color: AppTheme.textSecondary)),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              chat.setSystemPrompt(controller.text);
-            },
-            child: const Text('Save',
-                style: TextStyle(
-                    color:      AppTheme.accent,
-                    fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    ).then((_) => controller.dispose());
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -179,6 +98,21 @@ class _ChatScreenState extends State<ChatScreen> {
           appBar: _buildAppBar(context, chat),
           body: Column(
             children: [
+              if (_promptExpanded && chat.currentConversation != null)
+                _SystemPromptBar(
+                  key:          ValueKey(chat.currentConversation!.id),
+                  initialValue: chat.currentConversation!.systemPrompt ?? '',
+                  hasCustomPrompt: chat.currentConversation!.systemPrompt != null,
+                  onSave: (text) {
+                    chat.setSystemPrompt(text.trim().isEmpty ? null : text.trim());
+                    setState(() => _promptExpanded = false);
+                  },
+                  onCancel: () => setState(() => _promptExpanded = false),
+                  onReset: () {
+                    chat.setSystemPrompt(null);
+                    setState(() => _promptExpanded = false);
+                  },
+                ),
               Expanded(
                 child: chat.isEmpty
                     ? _EmptyState()
@@ -284,12 +218,15 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             icon: Icon(
               Icons.tune_rounded,
-              color: hasCustomPrompt ? AppTheme.accent : null,
+              color: (_promptExpanded || hasCustomPrompt)
+                  ? AppTheme.accent
+                  : null,
             ),
             tooltip: hasCustomPrompt
                 ? 'Custom system prompt active'
                 : 'System prompt',
-            onPressed: () => _showSystemPromptSheet(context, chat),
+            onPressed: () =>
+                setState(() => _promptExpanded = !_promptExpanded),
           ),
         // Export conversation
         if (!chat.isEmpty)
@@ -316,6 +253,142 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         const SizedBox(width: 4),
       ],
+    );
+  }
+}
+
+// ── Inline system prompt editor ───────────────────────────────────────────────
+
+class _SystemPromptBar extends StatefulWidget {
+  final String       initialValue;
+  final bool         hasCustomPrompt;
+  final void Function(String) onSave;
+  final VoidCallback onCancel;
+  final VoidCallback onReset;
+
+  const _SystemPromptBar({
+    super.key,
+    required this.initialValue,
+    required this.hasCustomPrompt,
+    required this.onSave,
+    required this.onCancel,
+    required this.onReset,
+  });
+
+  @override
+  State<_SystemPromptBar> createState() => _SystemPromptBarState();
+}
+
+class _SystemPromptBarState extends State<_SystemPromptBar> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppTheme.surfaceRaised,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.tune_rounded,
+                  size: 14, color: AppTheme.accent),
+              const SizedBox(width: 6),
+              const Text('System Prompt',
+                  style: TextStyle(
+                      color:      AppTheme.textPrimary,
+                      fontSize:   13,
+                      fontWeight: FontWeight.w700)),
+              const Spacer(),
+              const Text(
+                'Overrides default for this conversation',
+                style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _ctrl,
+            maxLines:   5,
+            minLines:   2,
+            style: const TextStyle(
+                color: AppTheme.textPrimary, fontSize: 13),
+            decoration: InputDecoration(
+              hintText:  'You are a helpful assistant…',
+              hintStyle: const TextStyle(
+                  color: AppTheme.textMuted, fontSize: 12),
+              filled:    true,
+              fillColor: AppTheme.surface,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: AppTheme.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: AppTheme.accent),
+              ),
+              contentPadding: const EdgeInsets.all(10),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              if (widget.hasCustomPrompt)
+                TextButton(
+                  onPressed: widget.onReset,
+                  style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: const Size(0, 32)),
+                  child: const Text('Reset to default',
+                      style: TextStyle(
+                          color: AppTheme.textMuted, fontSize: 12)),
+                ),
+              const Spacer(),
+              TextButton(
+                onPressed: widget.onCancel,
+                style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: const Size(0, 32)),
+                child: const Text('Cancel',
+                    style: TextStyle(
+                        color: AppTheme.textSecondary, fontSize: 13)),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: () => widget.onSave(_ctrl.text),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.accent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 8),
+                  minimumSize: const Size(0, 32),
+                  elevation: 0,
+                ),
+                child: const Text('Save',
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
