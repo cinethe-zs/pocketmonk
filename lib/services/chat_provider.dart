@@ -140,9 +140,11 @@ class ChatProvider extends ChangeNotifier {
 
   // ── Inference ─────────────────────────────────────────────────────────────
 
+  static const double _autoCompressThreshold = 0.85;
+
   Future<void> sendMessage(String text) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty || _isGenerating) return;
+    if (trimmed.isEmpty || _isGenerating || _isCompressing) return;
 
     _errorMessage = null;
 
@@ -202,6 +204,14 @@ class ChatProvider extends ChangeNotifier {
           final userMsgs = _current!.messages.where((m) => m.isUser).toList();
           if (userMsgs.length == 1 && _streamBuffer.isNotEmpty) {
             _autoGenerateTitle(userMsgs.first.content, _streamBuffer);
+          }
+          // Auto-compress when context is nearly full
+          final ratio = contextLength > 0
+              ? estimatedTokenCount / contextLength
+              : 0.0;
+          if (ratio >= _autoCompressThreshold &&
+              _current!.messages.length > 6) {
+            compressContext();
           }
         },
         onError: (Object e) {

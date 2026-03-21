@@ -156,7 +156,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 onCompress:    () => chat.compressContext(),
               ),
               ChatInputBar(
-                isGenerating: chat.isGenerating,
+                isGenerating: chat.isGenerating || chat.isCompressing,
                 onSend:       chat.sendMessage,
                 onStop:       chat.stopGeneration,
               ),
