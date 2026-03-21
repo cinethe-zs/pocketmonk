@@ -477,12 +477,15 @@ class _ConversationDrawer extends StatefulWidget {
 
 class _ConversationDrawerState extends State<_ConversationDrawer> {
   final _searchController = TextEditingController();
-  String  _query     = '';
-  String? _activeTag;   // null = show all
+  final _tagAddController = TextEditingController();
+  String        _query      = '';
+  String?       _activeTag;
+  Conversation? _taggingConv;  // non-null = inline tag editor is open
 
   @override
   void dispose() {
     _searchController.dispose();
+    _tagAddController.dispose();
     super.dispose();
   }
 
@@ -646,6 +649,16 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
 
             const Divider(color: AppTheme.border, height: 16),
 
+            // Inline tag editor
+            if (_taggingConv != null)
+              _InlineTagEditor(
+                conv:          _taggingConv!,
+                chat:          chat,
+                addController: _tagAddController,
+                onClose:       () => setState(() => _taggingConv = null),
+                onChanged:     () => setState(() {}),
+              ),
+
             // Conversation list
             Expanded(
               child: convs.isEmpty
@@ -689,8 +702,10 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
                               chat.loadConversation(conv);
                               Navigator.pop(context);
                             },
-                            onLongPress: () =>
-                                _showTagSheet(context, chat, conv),
+                            onLongPress: () => setState(() {
+                              _taggingConv = conv;
+                              _tagAddController.clear();
+                            }),
                           ),
                         );
                       },
@@ -702,150 +717,6 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
     );
   }
 
-  void _showTagSheet(
-    BuildContext context,
-    ChatProvider chat,
-    Conversation conv,
-  ) {
-    final addController = TextEditingController();
-
-    showModalBottomSheet(
-      context:         context,
-      backgroundColor: AppTheme.surface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => Padding(
-          padding: EdgeInsets.fromLTRB(
-              20, 16, 20,
-              20 + MediaQuery.of(context).viewInsets.bottom),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 36, height: 4,
-                  margin: const EdgeInsets.only(bottom: 14),
-                  decoration: BoxDecoration(
-                    color: AppTheme.border,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              Text(
-                conv.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    color:      AppTheme.textPrimary,
-                    fontSize:   15,
-                    fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 12),
-              if (conv.tags.isNotEmpty) ...[
-                const Text('Tags',
-                    style: TextStyle(
-                        color:      AppTheme.textMuted,
-                        fontSize:   11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.6)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6, runSpacing: 6,
-                  children: conv.tags
-                      .map((t) => InputChip(
-                            label: Text(t,
-                                style: const TextStyle(
-                                    color:    AppTheme.textPrimary,
-                                    fontSize: 12)),
-                            backgroundColor: AppTheme.surfaceRaised,
-                            deleteIconColor: AppTheme.textMuted,
-                            side: const BorderSide(
-                                color: AppTheme.border),
-                            onDeleted: () {
-                              chat.removeTagFromConversation(
-                                  conv, t);
-                              setSheetState(() {});
-                              setState(() {});
-                            },
-                          ))
-                      .toList(),
-                ),
-                const SizedBox(height: 14),
-              ],
-              // Add tag
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: addController,
-                      autofocus:  conv.tags.isEmpty,
-                      style: const TextStyle(
-                          color: AppTheme.textPrimary, fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText:  'Add a tag…',
-                        hintStyle: const TextStyle(
-                            color: AppTheme.textMuted),
-                        filled:    true,
-                        fillColor: AppTheme.surfaceRaised,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(
-                              color: AppTheme.border),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(
-                              color: AppTheme.accent),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        isDense: true,
-                      ),
-                      onSubmitted: (v) {
-                        if (v.trim().isEmpty) return;
-                        chat.addTagToConversation(conv, v.trim());
-                        addController.clear();
-                        setSheetState(() {});
-                        setState(() {});
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: () {
-                      final v = addController.text.trim();
-                      if (v.isEmpty) return;
-                      chat.addTagToConversation(conv, v);
-                      addController.clear();
-                      setSheetState(() {});
-                      setState(() {});
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.accent,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      elevation: 0,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                    ),
-                    child: const Text('Add',
-                        style: TextStyle(fontWeight: FontWeight.w600)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    ).then((_) => addController.dispose());
-  }
-
   String _formatDate(DateTime dt) {
     final now  = DateTime.now();
     final diff = now.difference(dt);
@@ -854,6 +725,136 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
     if (diff.inDays    < 1)  return '${diff.inHours}h ago';
     if (diff.inDays    < 7)  return '${diff.inDays}d ago';
     return '${dt.day}/${dt.month}/${dt.year}';
+  }
+}
+
+// ── Inline tag editor ─────────────────────────────────────────────────────────
+
+class _InlineTagEditor extends StatelessWidget {
+  final Conversation          conv;
+  final ChatProvider          chat;
+  final TextEditingController addController;
+  final VoidCallback          onClose;
+  final VoidCallback          onChanged;
+
+  const _InlineTagEditor({
+    required this.conv,
+    required this.chat,
+    required this.addController,
+    required this.onClose,
+    required this.onChanged,
+  });
+
+  void _addTag() {
+    final v = addController.text.trim();
+    if (v.isEmpty) return;
+    chat.addTagToConversation(conv, v);
+    addController.clear();
+    onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppTheme.surfaceRaised,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  conv.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color:      AppTheme.textPrimary,
+                    fontSize:   13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: onClose,
+                child: const Icon(Icons.close_rounded,
+                    size: 16, color: AppTheme.textMuted),
+              ),
+            ],
+          ),
+          if (conv.tags.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6, runSpacing: 4,
+              children: conv.tags
+                  .map((t) => InputChip(
+                        label: Text(t,
+                            style: const TextStyle(
+                                color: AppTheme.textPrimary, fontSize: 11)),
+                        backgroundColor: AppTheme.surface,
+                        deleteIconColor: AppTheme.textMuted,
+                        side: const BorderSide(color: AppTheme.border),
+                        visualDensity: VisualDensity.compact,
+                        onDeleted: () {
+                          chat.removeTagFromConversation(conv, t);
+                          onChanged();
+                        },
+                      ))
+                  .toList(),
+            ),
+          ],
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: addController,
+                  style: const TextStyle(
+                      color: AppTheme.textPrimary, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText:  'Add a tag…',
+                    hintStyle: const TextStyle(
+                        color: AppTheme.textMuted, fontSize: 12),
+                    filled:    true,
+                    fillColor: AppTheme.surface,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppTheme.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: AppTheme.accent),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 8),
+                    isDense: true,
+                  ),
+                  onSubmitted: (_) => _addTag(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: _addTag,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.accent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 10),
+                  minimumSize: const Size(0, 36),
+                  elevation: 0,
+                ),
+                child: const Text('Add',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 
