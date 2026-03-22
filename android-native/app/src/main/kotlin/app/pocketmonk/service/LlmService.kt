@@ -106,17 +106,22 @@ class LlmService(private val context: Context) {
         }
     }
 
-    suspend fun summarizeHistory(messages: List<Message>): String? = withContext(Dispatchers.IO) {
+    suspend fun summarizeHistory(messages: List<Message>, existingSummary: String? = null): String? = withContext(Dispatchers.IO) {
         val engine = llm ?: return@withContext null
         val textToSummarize = messages
-            .filter { !it.isSummary }
+            .filter { !it.isSummary && !it.isArchived }
             .joinToString("\n") { msg ->
                 val roleLabel = if (msg.role == MessageRole.USER) "User" else "Assistant"
                 "$roleLabel: ${msg.content}"
             }
         val prompt = buildString {
             append("<start_of_turn>user\n")
-            append("Summarize the following conversation in 2-3 sentences, preserving key facts:\n\n")
+            if (existingSummary != null) {
+                append("Here is a summary of earlier conversation:\n$existingSummary\n\n")
+                append("Now extend the summary to include the following new exchanges, in 2-4 sentences total, preserving key facts:\n\n")
+            } else {
+                append("Summarize the following conversation in 2-3 sentences, preserving key facts:\n\n")
+            }
             append(textToSummarize)
             append("<end_of_turn>\n")
             append("<start_of_turn>model\n")

@@ -137,7 +137,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _errorMessage.value = null
 
         val contextSummary = conv.messages.firstOrNull { it.isSummary }?.content
-        val historyForPrompt = conv.messages.filter { !it.isSummary && it.status != MessageStatus.STREAMING }
+        val historyForPrompt = conv.messages.filter { !it.isSummary && !it.isArchived && it.status != MessageStatus.STREAMING }
 
         llmService.chat(
             history = historyForPrompt,
@@ -272,33 +272,36 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val conv = _currentConversation.value ?: return
         if (_isCompressing.value) return
 
-        val nonSummaryMessages = conv.messages.filter { !it.isSummary }
-        if (nonSummaryMessages.size <= keepLast) return
+        // Only active (non-archived, non-summary) messages are candidates
+        val activeMessages = conv.messages.filter { !it.isSummary && !it.isArchived }
+        if (activeMessages.size <= keepLast) return
 
-        val toSummarize = nonSummaryMessages.dropLast(keepLast)
-        val toKeep = nonSummaryMessages.takeLast(keepLast)
+        val toArchive = activeMessages.dropLast(keepLast)
+        val existingSummary = conv.messages.firstOrNull { it.isSummary }?.content
 
         _isCompressing.value = true
 
         viewModelScope.launch {
-            val summary = llmService.summarizeHistory(toSummarize)
+            val summary = llmService.summarizeHistory(toArchive, existingSummary)
             withContext(Dispatchers.Main) {
                 if (summary != null) {
-                    val summaryMessage = Message(
+                    // Mark messages as archived — they stay visible in the UI
+                    toArchive.forEach { it.isArchived = true }
+
+                    // Replace the existing summary message (or insert one after the last archived msg)
+                    conv.messages.removeAll { it.isSummary }
+                    val insertIndex = conv.messages.indexOfLast { it.isArchived } + 1
+                    conv.messages.add(insertIndex, Message(
                         role = MessageRole.ASSISTANT,
                         content = summary,
                         isSummary = true,
                         status = MessageStatus.DONE
-                    )
-                    conv.messages.clear()
-                    conv.messages.add(summaryMessage)
-                    conv.messages.addAll(toKeep)
+                    ))
                     _currentConversation.value = conv.copy(messages = conv.messages)
                 }
                 _isCompressing.value = false
                 persistCurrentConversation()
 
-                // If sendMessage was deferred because context was full, send it now
                 val pending = _pendingSendText
                 if (pending != null) {
                     _pendingSendText = null

@@ -2,6 +2,8 @@ package app.pocketmonk.ui
 
 import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -27,6 +29,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
@@ -321,18 +326,25 @@ fun ChatScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     itemsIndexed(messages, key = { _, msg -> msg.id }) { index, message ->
-                        MessageBubble(
-                            message = message,
-                            messageIndex = index,
-                            isLastAssistant = index == lastAssistantIndex,
-                            isGenerating = isGenerating,
-                            streamingText = streamingText,
-                            onStar = { viewModel.toggleStarMessage(message.id) },
-                            onEdit = { newContent -> viewModel.editMessageAt(index, newContent) },
-                            onFork = { viewModel.forkConversationAt(index) },
-                            onRegenerate = { viewModel.regenerateLastResponse() },
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                        )
+                        if (message.isSummary) {
+                            SummaryBanner(
+                                summary = message.content,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        } else {
+                            MessageBubble(
+                                message = message,
+                                messageIndex = index,
+                                isLastAssistant = index == lastAssistantIndex,
+                                isGenerating = isGenerating,
+                                streamingText = streamingText,
+                                onStar = { viewModel.toggleStarMessage(message.id) },
+                                onEdit = { newContent -> viewModel.editMessageAt(index, newContent) },
+                                onFork = { viewModel.forkConversationAt(index) },
+                                onRegenerate = { viewModel.regenerateLastResponse() },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
@@ -477,6 +489,55 @@ fun ChatScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+
+@Composable
+private fun SummaryBanner(summary: String, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .background(app.pocketmonk.ui.theme.SurfaceRaised)
+            .border(1.dp, app.pocketmonk.ui.theme.Border, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                Icons.Filled.Summarize,
+                contentDescription = null,
+                tint = app.pocketmonk.ui.theme.TextMuted,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Conversation summarized",
+                color = app.pocketmonk.ui.theme.TextMuted,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = app.pocketmonk.ui.theme.TextMuted,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+        AnimatedVisibility(visible = expanded) {
+            Text(
+                text = summary,
+                color = app.pocketmonk.ui.theme.TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
+            )
         }
     }
 }
