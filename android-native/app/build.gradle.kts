@@ -62,6 +62,7 @@ dependencies {
     implementation(libs.lifecycle.runtime.ktx)
     implementation(libs.navigation.compose)
     implementation(libs.gson)
+    implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.core.ktx)
     implementation(libs.appcompat)

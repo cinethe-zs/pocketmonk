@@ -1,343 +1,404 @@
 package app.pocketmonk.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.pocketmonk.service.ModelInfo
-import app.pocketmonk.service.ModelManager
-import app.pocketmonk.ui.theme.Accent
-import app.pocketmonk.ui.theme.AccentDim
-import app.pocketmonk.ui.theme.Background
-import app.pocketmonk.ui.theme.Border
-import app.pocketmonk.ui.theme.Error
-import app.pocketmonk.ui.theme.Success
-import app.pocketmonk.ui.theme.Surface
-import app.pocketmonk.ui.theme.SurfaceRaised
-import app.pocketmonk.ui.theme.TextMuted
-import app.pocketmonk.ui.theme.TextPrimary
-import app.pocketmonk.ui.theme.TextSecondary
+import androidx.compose.ui.unit.sp
+import app.pocketmonk.service.DownloadState
+import app.pocketmonk.service.ModelEntry
+import app.pocketmonk.ui.theme.*
+import app.pocketmonk.viewmodel.ChatViewModel
 import java.io.File
 
 @Composable
 fun ModelSetupScreen(
-    onModelSelected: (String) -> Unit,
-    modifier: Modifier = Modifier
+    viewModel: ChatViewModel,
+    onModelReady: (String) -> Unit,
 ) {
-    val context = LocalContext.current
-    val modelManager = remember { ModelManager(context) }
-    var availableModels by remember { mutableStateOf(modelManager.listAvailableModels()) }
-    var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val downloadState by viewModel.downloadState.collectAsState()
+    val manager = viewModel.modelManager
 
-    Box(
-        modifier = modifier
+    // Navigate away when download completes
+    LaunchedEffect(downloadState) {
+        if (downloadState is DownloadState.Done) {
+            onModelReady((downloadState as DownloadState.Done).modelPath)
+        }
+    }
+
+    var hfToken    by remember { mutableStateOf(manager.getHfToken() ?: "") }
+    var tokenVisible by remember { mutableStateOf(false) }
+    var tokenSaved by remember { mutableStateOf(manager.hasHfToken()) }
+    val localFiles = remember { manager.listLocalFiles() }
+
+    Column(
+        modifier = Modifier
             .fillMaxSize()
             .background(Background)
+            .padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        LazyColumn(
+        Spacer(Modifier.height(48.dp))
+
+        // ── Header ──────────────────────────────────────────────────────────
+
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .size(72.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(SurfaceRaised)
+                .border(1.dp, Border, RoundedCornerShape(20.dp)),
+            contentAlignment = Alignment.Center,
         ) {
-            item {
-                Spacer(Modifier.height(48.dp))
-                // Header
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.SmartToy,
-                        contentDescription = null,
-                        tint = Accent,
-                        modifier = Modifier.size(56.dp)
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = "PocketMonk",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = "Private AI — 100% on-device",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                }
-                Spacer(Modifier.height(24.dp))
+            Icon(Icons.Rounded.SelfImprovement, null, tint = Accent, modifier = Modifier.size(34.dp))
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        Text("PocketMonk", color = TextPrimary, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("Choose a model to get started", color = TextMuted, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp))
+
+        Spacer(Modifier.height(28.dp))
+
+        // ── HuggingFace token ────────────────────────────────────────────────
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(Surface)
+                .border(1.dp, Border, RoundedCornerShape(12.dp))
+                .padding(14.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Key, null, tint = if (tokenSaved) Success else TextMuted, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("HuggingFace Token", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.weight(1f))
+                if (tokenSaved) Text("Saved ✓", color = Success, fontSize = 11.sp)
             }
 
-            item {
-                Text(
-                    text = "Model Setup",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = TextPrimary
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "Download a model from Google AI Edge or Kaggle and place the .bin file in:",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
-                )
-                Spacer(Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(SurfaceRaised)
-                        .border(1.dp, Border, RoundedCornerShape(8.dp))
-                        .padding(12.dp)
-                ) {
-                    Text(
-                        text = modelManager.modelsDirectory().absolutePath,
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                        color = Accent
-                    )
-                }
-            }
+            Spacer(Modifier.height(4.dp))
 
-            item {
-                // Refresh button + found count
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Available Models",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = TextPrimary
-                    )
-                    IconButton(onClick = {
-                        availableModels = modelManager.listAvailableModels()
-                    }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = Accent)
-                    }
-                }
-            }
+            Text(
+                text = "Needed to download Gemma. Get a token at huggingface.co/settings/tokens, " +
+                       "then accept the Gemma license on the model page.",
+                color = TextMuted,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+            )
 
-            // Available models found locally
-            if (availableModels.isNotEmpty()) {
-                items(availableModels) { file ->
-                    AvailableModelCard(
-                        file = file,
-                        isLoading = isLoading,
-                        onSelect = {
-                            isLoading = true
-                            errorMessage = null
-                            onModelSelected(file.absolutePath)
-                        }
-                    )
-                }
-            } else {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Surface)
-                            .border(1.dp, Border, RoundedCornerShape(8.dp))
-                            .padding(16.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "No models found. Place a .bin model file in the directory above, then tap Refresh.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextMuted
+            Spacer(Modifier.height(10.dp))
+
+            // Inline text field — no dialog or bottom sheet
+            OutlinedTextField(
+                value = hfToken,
+                onValueChange = { hfToken = it; tokenSaved = false },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("hf_...", color = TextMuted, fontSize = 13.sp) },
+                singleLine = true,
+                visualTransformation = if (tokenVisible) VisualTransformation.None
+                                       else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { tokenVisible = !tokenVisible }) {
+                        Icon(
+                            if (tokenVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                            null, tint = TextMuted, modifier = Modifier.size(18.dp),
                         )
                     }
+                },
+                textStyle = LocalTextStyle.current.copy(color = TextPrimary, fontSize = 13.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor      = Accent,
+                    unfocusedBorderColor    = Border,
+                    focusedContainerColor   = SurfaceRaised,
+                    unfocusedContainerColor = SurfaceRaised,
+                    cursorColor             = Accent,
+                ),
+                shape = RoundedCornerShape(8.dp),
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                if (tokenSaved) {
+                    TextButton(
+                        onClick = { manager.clearHfToken(); hfToken = ""; tokenSaved = false },
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                    ) {
+                        Text("Clear", color = TextMuted, fontSize = 12.sp)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                }
+                Button(
+                    onClick = { manager.saveHfToken(hfToken); tokenSaved = true },
+                    enabled = hfToken.isNotBlank() && !tokenSaved,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor         = Accent,
+                        disabledContainerColor = Border,
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text("Save token", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
+        }
 
-            item {
-                Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
+
+        // ── Error banner ─────────────────────────────────────────────────────
+
+        if (downloadState is DownloadState.Error) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Error.copy(alpha = 0.12f))
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.ErrorOutline, null, tint = Error, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Supported Models",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = TextPrimary
+                    text = (downloadState as DownloadState.Error).message,
+                    color = Error,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f),
+                    lineHeight = 16.sp,
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "These MediaPipe-compatible models are known to work with PocketMonk:",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
+                IconButton(onClick = { viewModel.dismissDownloadError() }, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Rounded.Close, null, tint = Error, modifier = Modifier.size(16.dp))
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        // ── Section header ───────────────────────────────────────────────────
+
+        Text(
+            text = "Available models",
+            color = TextMuted,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 6.dp),
+        )
+
+        // ── Model list ───────────────────────────────────────────────────────
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(manager.catalog) { entry ->
+                ModelCard(
+                    entry       = entry,
+                    isDownloaded = manager.isDownloaded(entry),
+                    downloadState = downloadState,
+                    tokenSaved  = tokenSaved,
+                    onDownload  = { viewModel.downloadModel(entry) },
+                    onCancel    = { viewModel.cancelDownload() },
+                    onUse       = { viewModel.useLocalModel(manager.modelFile(entry).absolutePath) },
                 )
             }
 
-            items(modelManager.catalog) { info ->
-                CatalogModelCard(
-                    info = info,
-                    isAvailable = modelManager.modelExists(info.filename)
-                )
+            // Extra local files not in catalog
+            val catalogNames = manager.catalog.map { it.filename }.toSet()
+            val extras = localFiles.filter { it.name !in catalogNames }
+            if (extras.isNotEmpty()) {
+                item {
+                    Text(
+                        "Other local files",
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                items(extras) { f ->
+                    LocalFileCard(file = f, onUse = { viewModel.useLocalModel(f.absolutePath) })
+                }
             }
 
             item { Spacer(Modifier.height(32.dp)) }
         }
+    }
+}
 
-        if (errorMessage != null) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(Error)
-                    .padding(16.dp)
-            ) {
-                Text(text = errorMessage ?: "", color = TextPrimary)
+// ── Model card ────────────────────────────────────────────────────────────────
+
+@Composable
+private fun ModelCard(
+    entry: ModelEntry,
+    isDownloaded: Boolean,
+    downloadState: DownloadState,
+    tokenSaved: Boolean,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onUse: () -> Unit,
+) {
+    val isThisDownloading = downloadState is DownloadState.Downloading &&
+            (downloadState as DownloadState.Downloading).modelId == entry.id
+    val isAnyDownloading  = downloadState is DownloadState.Downloading
+    val progress = if (isThisDownloading) (downloadState as DownloadState.Downloading).progress else 0f
+
+    val borderColor = when {
+        entry.recommendedForPixel7a -> Accent.copy(alpha = 0.5f)
+        isDownloaded                -> Success.copy(alpha = 0.4f)
+        else                        -> Border
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface)
+            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+    ) {
+        // Title row
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(entry.name, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    if (entry.recommendedForPixel7a) {
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(AccentDim)
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                        ) {
+                            Text("Recommended", color = Accent, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Text(entry.description, color = TextMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(entry.sizeLabel, color = TextMuted, fontSize = 11.sp)
+        }
+
+        // Progress bar
+        AnimatedVisibility(visible = isThisDownloading) {
+            Column(modifier = Modifier.padding(top = 10.dp)) {
+                if (progress >= 0f) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                        color = Accent,
+                        trackColor = Border,
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                        color = Accent,
+                        trackColor = Border,
+                    )
+                }
+                Text(
+                    text = if (progress < 0f) "Connecting…" else "${"%.0f".format(progress * 100)}%",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
         }
 
-        if (isLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Background.copy(alpha = 0.7f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Accent)
-                    Spacer(Modifier.height(16.dp))
-                    Text("Loading model…", color = TextPrimary)
+        Spacer(Modifier.height(10.dp))
+
+        // Action button
+        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+            when {
+                isThisDownloading -> OutlinedButton(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
+                    border = ButtonDefaults.outlinedButtonBorder.copy(brush = SolidColor(Error.copy(alpha = 0.5f))),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                ) {
+                    Text("Cancel", fontSize = 12.sp)
+                }
+
+                isDownloaded -> Button(
+                    onClick = onUse,
+                    colors = ButtonDefaults.buttonColors(containerColor = Success),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Rounded.CheckCircle, null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Use model", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+
+                else -> Button(
+                    onClick = onDownload,
+                    enabled = !isAnyDownloading && tokenSaved,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor         = Accent,
+                        disabledContainerColor = Border,
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Rounded.Download, null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (!tokenSaved) "Save token first" else "Download",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
         }
     }
 }
 
-@Composable
-private fun AvailableModelCard(
-    file: File,
-    isLoading: Boolean,
-    onSelect: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(AccentDim)
-            .border(1.dp, Accent, RoundedCornerShape(8.dp))
-            .padding(12.dp)
-    ) {
-        Icon(
-            imageVector = Icons.Filled.CheckCircle,
-            contentDescription = null,
-            tint = Success,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(Modifier.width(10.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = file.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextPrimary
-            )
-            Text(
-                text = "%.1f MB".format(file.length() / 1_000_000.0),
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted
-            )
-        }
-        Button(
-            onClick = onSelect,
-            enabled = !isLoading,
-            colors = ButtonDefaults.buttonColors(containerColor = Accent)
-        ) {
-            Text("Use", color = TextPrimary)
-        }
-    }
-}
+// ── Local file card ───────────────────────────────────────────────────────────
 
 @Composable
-private fun CatalogModelCard(
-    info: ModelInfo,
-    isAvailable: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
+private fun LocalFileCard(file: File, onUse: () -> Unit) {
+    Row(
+        modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(Surface)
-            .border(
-                width = 1.dp,
-                color = if (isAvailable) Success else Border,
-                shape = RoundedCornerShape(8.dp)
-            )
-            .padding(12.dp)
+            .border(1.dp, Border, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = info.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextPrimary
-            )
-            Text(
-                text = info.size,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isAvailable) Success else TextMuted
-            )
+        Icon(Icons.Rounded.FolderOpen, null, tint = TextMuted, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(file.name, color = TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${"%.1f".format(file.length() / 1_048_576.0)} MB", color = TextMuted, fontSize = 11.sp)
         }
-        Spacer(Modifier.height(2.dp))
-        Text(
-            text = info.description,
-            style = MaterialTheme.typography.bodySmall,
-            color = TextSecondary
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = info.filename,
-            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-            color = TextMuted
-        )
-        if (isAvailable) {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = "Available locally",
-                style = MaterialTheme.typography.labelSmall,
-                color = Success
-            )
+        Spacer(Modifier.width(8.dp))
+        TextButton(
+            onClick = onUse,
+            colors = ButtonDefaults.textButtonColors(contentColor = Accent),
+        ) {
+            Text("Use", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

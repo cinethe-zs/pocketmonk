@@ -8,8 +8,12 @@ import app.pocketmonk.model.Message
 import app.pocketmonk.model.MessageRole
 import app.pocketmonk.model.MessageStatus
 import app.pocketmonk.repository.ConversationRepository
+import app.pocketmonk.service.DownloadState
 import app.pocketmonk.service.LlmService
+import app.pocketmonk.service.ModelEntry
+import app.pocketmonk.service.ModelManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +25,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repo = ConversationRepository(application)
     val llmService = LlmService(application)
+    val modelManager = ModelManager(application)
+
+    private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
+
+    private var downloadJob: Job? = null
 
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
@@ -337,6 +347,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissError() {
         _errorMessage.value = null
+    }
+
+    // ── Model download ────────────────────────────────────────────────────────
+
+    fun downloadModel(entry: ModelEntry) {
+        if (_downloadState.value is DownloadState.Downloading) return
+        downloadJob = viewModelScope.launch {
+            _downloadState.value = DownloadState.Downloading(entry.id, 0f)
+            try {
+                val file = modelManager.downloadModel(entry) { downloaded, total ->
+                    val progress = if (total > 0) downloaded.toFloat() / total else -1f
+                    _downloadState.value = DownloadState.Downloading(entry.id, progress)
+                }
+                modelManager.setActiveModelPath(file.absolutePath)
+                _downloadState.value = DownloadState.Done(file.absolutePath)
+            } catch (e: Exception) {
+                _downloadState.value = DownloadState.Error(e.message ?: "Download failed")
+            }
+        }
+    }
+
+    fun cancelDownload() {
+        downloadJob?.cancel()
+        downloadJob = null
+        _downloadState.value = DownloadState.Idle
+    }
+
+    fun dismissDownloadError() {
+        _downloadState.value = DownloadState.Idle
+    }
+
+    fun useLocalModel(path: String) {
+        modelManager.setActiveModelPath(path)
+        _downloadState.value = DownloadState.Done(path)
     }
 
     private fun autoGenerateTitle(conv: Conversation, userMsg: String, assistantMsg: String) {
