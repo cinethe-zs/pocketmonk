@@ -77,6 +77,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var currentModelPath: String? = null
     private var currentContextSize: Int = 2048
+    private var consecutiveRetries = 0
 
     init {
         viewModelScope.launch {
@@ -184,8 +185,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             assistantMessage.status = MessageStatus.ERROR
                             _currentConversation.value = conv.copy(messages = conv.messages)
                             persistCurrentConversation()
+                            checkAndAutoRetry()
                         }
                     } else {
+                        consecutiveRetries = 0
                         assistantMessage.content = finalText
                         assistantMessage.status = MessageStatus.DONE
                         _currentConversation.value = conv.copy(messages = conv.messages)
@@ -212,6 +215,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _isGenerating.value = false
                     _errorMessage.value = error
                     _currentConversation.value = conv.copy(messages = conv.messages)
+                    checkAndAutoRetry()
                 }
             }
         )
@@ -540,7 +544,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (!_modelReady.value || _isGenerating.value || _isCompressing.value) return
         val lastActive = conv.messages.lastOrNull { !it.isArchived && !it.isSummary }
         if (lastActive?.status == MessageStatus.ERROR && lastActive.role == MessageRole.ASSISTANT) {
-            regenerateLastResponse()
+            if (consecutiveRetries < 3) {
+                consecutiveRetries++
+                regenerateLastResponse()
+            } else {
+                consecutiveRetries = 0
+                // 3 attempts failed — leave the error visible so the user can start a new conversation
+            }
+        } else {
+            consecutiveRetries = 0
         }
     }
 
