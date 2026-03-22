@@ -63,10 +63,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var _pendingSendText: String? = null
 
     val estimatedTokenCount: Int
-        get() = _currentConversation.value?.messages
-            ?.filter { !it.isSummary && !it.isArchived && it.status != MessageStatus.ERROR }
-            ?.sumOf { it.content.length }
-            ?.div(4) ?: 0
+        get() {
+            val conv = _currentConversation.value ?: return 0
+            val activeMessages = conv.messages.filter {
+                !it.isSummary && !it.isArchived && it.status != MessageStatus.ERROR
+            }
+            // content tokens + ~12 tokens per message for Gemma chat template overhead
+            val messageTokens = activeMessages.sumOf { it.content.length / 4 + 12 }
+            // system prompt tokens (included in every prompt)
+            val systemTokens = (conv.systemPrompt?.length ?: 80) / 4 + 12
+            return messageTokens + systemTokens
+        }
 
     private var currentModelPath: String? = null
     private var currentContextSize: Int = 2048
@@ -208,24 +215,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val conv = _currentConversation.value ?: return
         if (_isGenerating.value || _isCompressing.value) return
 
-        // Remove last assistant message
-        val lastAssistant = conv.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
+        // Remove last active (non-archived) assistant message
+        val lastAssistant = conv.messages.lastOrNull { it.role == MessageRole.ASSISTANT && !it.isArchived }
         if (lastAssistant != null) {
             conv.messages.remove(lastAssistant)
             _currentConversation.value = conv.copy(messages = conv.messages)
         }
 
-        // Find last user message to re-send
-        val lastUserMsg = conv.messages.lastOrNull { it.role == MessageRole.USER }?.content ?: return
+        // Find and remove last active user message
+        val lastUser = conv.messages.lastOrNull { it.role == MessageRole.USER && !it.isArchived }
+        val lastUserMsg = lastUser?.content ?: return
+        conv.messages.remove(lastUser)
+        _currentConversation.value = conv.copy(messages = conv.messages)
 
-        // Remove last user message too so sendMessage can re-add it
-        val lastUser = conv.messages.lastOrNull { it.role == MessageRole.USER }
-        if (lastUser != null) {
-            conv.messages.remove(lastUser)
-            _currentConversation.value = conv.copy(messages = conv.messages)
+        // If context is already above 60% compress first, then send.
+        // This handles the case where the model returned empty because
+        // the prompt left too little room for the response.
+        val ratio = estimatedTokenCount.toFloat() / contextLength
+        if (ratio > 0.60f) {
+            _pendingSendText = lastUserMsg
+            compressContext()
+        } else {
+            sendMessage(lastUserMsg)
         }
-
-        sendMessage(lastUserMsg)
     }
 
     fun editMessageAt(index: Int, newContent: String) {
