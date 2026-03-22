@@ -64,7 +64,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     val estimatedTokenCount: Int
         get() = _currentConversation.value?.messages
-            ?.filter { !it.isSummary }
+            ?.filter { !it.isSummary && !it.isArchived && it.status != MessageStatus.ERROR }
             ?.sumOf { it.content.length }
             ?.div(4) ?: 0
 
@@ -137,7 +137,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _errorMessage.value = null
 
         val contextSummary = conv.messages.firstOrNull { it.isSummary }?.content
-        val historyForPrompt = conv.messages.filter { !it.isSummary && !it.isArchived && it.status != MessageStatus.STREAMING }
+        val historyForPrompt = conv.messages.filter {
+            !it.isSummary && !it.isArchived &&
+            it.status != MessageStatus.STREAMING && it.status != MessageStatus.ERROR
+        }
 
         llmService.chat(
             history = historyForPrompt,
