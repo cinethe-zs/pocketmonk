@@ -50,7 +50,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _modelReady = MutableStateFlow(false)
     val modelReady: StateFlow<Boolean> = _modelReady.asStateFlow()
 
-    val contextLength: Int = 1024
+    // Streaming text for the currently generating assistant message.
+    // Kept separate from _currentConversation so each partial update triggers
+    // recomposition regardless of StateFlow equality deduplication.
+    private val _streamingText = MutableStateFlow("")
+    val streamingText: StateFlow<String> = _streamingText.asStateFlow()
+
+    val contextLength: Int
+        get() = _currentConversation.value?.contextSize ?: 2048
+
+    // Message to send after auto-compress finishes
+    private var _pendingSendText: String? = null
 
     val estimatedTokenCount: Int
         get() = _currentConversation.value?.messages
@@ -59,6 +69,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             ?.div(4) ?: 0
 
     private var currentModelPath: String? = null
+    private var currentContextSize: Int = 2048
 
     init {
         viewModelScope.launch {
@@ -66,16 +77,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun initModel(modelPath: String) {
+    fun initModel(modelPath: String, contextSize: Int = 2048) {
         currentModelPath = modelPath
+        currentContextSize = contextSize
         viewModelScope.launch {
             _modelReady.value = false
             _errorMessage.value = null
             try {
-                llmService.initialize(modelPath)
+                llmService.initialize(modelPath, maxTokens = contextSize)
                 _modelReady.value = true
-            } catch (e: Exception) {
-                _errorMessage.value = "Failed to load model: ${e.message}"
+                // Ensure there's an active conversation to show in ChatScreen
+                if (_currentConversation.value == null) {
+                    val existing = _conversations.value.firstOrNull()
+                    if (existing != null) {
+                        _currentConversation.value = existing
+                    } else {
+                        newConversation()
+                    }
+                }
+            } catch (e: Throwable) {
+                _errorMessage.value = "Failed to load model: ${e.javaClass.simpleName}: ${e.message}"
                 _modelReady.value = false
             }
         }
@@ -87,6 +108,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (!_modelReady.value || _isGenerating.value || _isCompressing.value) return
+
+        // Auto-compress before generating if context is near the limit
+        val ratio = estimatedTokenCount.toFloat() / contextLength
+        if (ratio > 0.85f && conv.messages.count { !it.isSummary } > 4) {
+            _pendingSendText = text
+            compressContext()
+            return
+        }
 
         val userMessage = Message(
             role = MessageRole.USER,
@@ -101,6 +130,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             status = MessageStatus.STREAMING
         )
         conv.messages.add(assistantMessage)
+        _streamingText.value = ""
         _isGenerating.value = true
         _errorMessage.value = null
 
@@ -114,15 +144,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             onPartial = { partial ->
                 viewModelScope.launch(Dispatchers.Main) {
                     if (_isGenerating.value) {
-                        assistantMessage.content = partial
-                        assistantMessage.status = MessageStatus.STREAMING
-                        _currentConversation.value = conv.copy(messages = conv.messages)
+                        _streamingText.value = partial
                     }
                 }
             },
             onDone = {
                 viewModelScope.launch(Dispatchers.Main) {
+                    assistantMessage.content = _streamingText.value
                     assistantMessage.status = MessageStatus.DONE
+                    _streamingText.value = ""
                     _isGenerating.value = false
                     _currentConversation.value = conv.copy(messages = conv.messages)
 
@@ -131,9 +161,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         autoGenerateTitle(conv, userMessage.content, assistantMessage.content)
                     }
 
-                    // Auto-compress check
-                    val ratio = estimatedTokenCount.toFloat() / contextLength
-                    if (ratio > 0.85f && conv.messages.count { !it.isSummary } > 6) {
+                    // Auto-compress after generation if still above threshold
+                    val postRatio = estimatedTokenCount.toFloat() / contextLength
+                    if (postRatio > 0.85f && conv.messages.count { !it.isSummary } > 6) {
                         compressContext()
                     } else {
                         persistCurrentConversation()
@@ -142,8 +172,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             },
             onError = { error ->
                 viewModelScope.launch(Dispatchers.Main) {
+                    assistantMessage.content = _streamingText.value.ifEmpty { "Error: $error" }
                     assistantMessage.status = MessageStatus.ERROR
-                    assistantMessage.content = "Error: $error"
+                    _streamingText.value = ""
                     _isGenerating.value = false
                     _errorMessage.value = error
                     _currentConversation.value = conv.copy(messages = conv.messages)
@@ -158,9 +189,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val conv = _currentConversation.value ?: return
         val lastMsg = conv.messages.lastOrNull()
         if (lastMsg?.status == MessageStatus.STREAMING) {
+            lastMsg.content = _streamingText.value
             lastMsg.status = MessageStatus.DONE
             _currentConversation.value = conv.copy(messages = conv.messages)
         }
+        _streamingText.value = ""
         persistCurrentConversation()
     }
 
@@ -260,15 +293,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _isCompressing.value = false
                 persistCurrentConversation()
+
+                // If sendMessage was deferred because context was full, send it now
+                val pending = _pendingSendText
+                if (pending != null) {
+                    _pendingSendText = null
+                    sendMessage(pending)
+                }
             }
         }
     }
 
-    fun newConversation() {
-        val modelPath = currentModelPath ?: return
+    fun newConversation(modelPath: String? = null, contextSize: Int? = null) {
+        val path = modelPath ?: currentModelPath ?: return
+        val size = contextSize ?: currentContextSize
+        // Re-init model if path or context size differs from what's currently loaded
+        if (path != currentModelPath || size != currentContextSize) {
+            initModel(path, size)
+        }
         val conv = Conversation(
             title = "New Conversation",
-            modelPath = modelPath
+            modelPath = path,
+            contextSize = size
         )
         viewModelScope.launch {
             repo.save(conv)
@@ -345,6 +391,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         persistCurrentConversation()
     }
 
+    fun renameConversation() {
+        val conv = _currentConversation.value ?: return
+        val messages = conv.messages.filter { !it.isSummary }
+        if (messages.isEmpty()) return
+        val context = messages.take(6).joinToString("\n") { msg ->
+            val role = if (msg.role == MessageRole.USER) "User" else "Assistant"
+            "$role: ${msg.content.take(200)}"
+        }
+        viewModelScope.launch {
+            val title = llmService.generateTitleFromContext(context)
+            if (!title.isNullOrBlank()) {
+                withContext(Dispatchers.Main) {
+                    applyTitle(conv, title)
+                }
+            }
+        }
+    }
+
     fun dismissError() {
         _errorMessage.value = null
     }
@@ -388,13 +452,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val title = llmService.generateTitle(userMsg, assistantMsg)
             if (!title.isNullOrBlank()) {
                 withContext(Dispatchers.Main) {
-                    conv.title = title
-                    _currentConversation.value = conv.copy(title = title)
-                    refreshConversationList(conv)
-                    persistCurrentConversation()
+                    applyTitle(conv, title)
                 }
             }
         }
+    }
+
+    // Applies a new title to a conversation without mutating the existing object,
+    // ensuring StateFlow detects the change and both current + list are updated.
+    private fun applyTitle(conv: Conversation, title: String) {
+        val updated = conv.copy(title = title)
+        if (_currentConversation.value?.id == conv.id) {
+            _currentConversation.value = updated
+        }
+        val list = _conversations.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == conv.id }
+        if (idx >= 0) {
+            list[idx] = updated
+            _conversations.value = list
+        }
+        viewModelScope.launch { repo.save(updated) }
     }
 
     private fun refreshConversationList(conv: Conversation) {

@@ -53,10 +53,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.pocketmonk.model.Message
@@ -81,6 +77,7 @@ fun MessageBubble(
     messageIndex: Int,
     isLastAssistant: Boolean,
     isGenerating: Boolean,
+    streamingText: String,
     onStar: () -> Unit,
     onEdit: (String) -> Unit,
     onFork: () -> Unit,
@@ -106,6 +103,7 @@ fun MessageBubble(
             message = message,
             isLastAssistant = isLastAssistant,
             isGenerating = isGenerating,
+            streamingText = if (isLastAssistant && message.status == MessageStatus.STREAMING) streamingText else "",
             onStar = onStar,
             onRegenerate = onRegenerate,
             modifier = modifier
@@ -296,12 +294,14 @@ private fun AssistantBubble(
     message: Message,
     isLastAssistant: Boolean,
     isGenerating: Boolean,
+    streamingText: String,
     onStar: () -> Unit,
     onRegenerate: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val clipboard = LocalClipboardManager.current
     val isStreaming = message.status == MessageStatus.STREAMING
+    val displayText = if (isStreaming && streamingText.isNotEmpty()) streamingText else message.content
 
     Column(
         horizontalAlignment = Alignment.Start,
@@ -325,14 +325,10 @@ private fun AssistantBubble(
                     .border(1.dp, Border, RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp))
                     .padding(12.dp)
             ) {
-                if (isStreaming && message.content.isEmpty()) {
+                if (isStreaming && displayText.isEmpty()) {
                     StreamingDots()
                 } else {
-                    Text(
-                        text = renderMarkdown(message.content),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextPrimary
-                    )
+                    MarkdownContent(text = displayText)
                 }
             }
         }
@@ -461,55 +457,3 @@ private fun SummaryCard(
     }
 }
 
-private fun renderMarkdown(text: String): AnnotatedString {
-    return buildAnnotatedString {
-        val lines = text.split('\n')
-        lines.forEachIndexed { lineIdx, line ->
-            var i = 0
-            while (i < line.length) {
-                // Bold **text**
-                if (i + 1 < line.length && line[i] == '*' && line[i + 1] == '*') {
-                    val end = line.indexOf("**", i + 2)
-                    if (end != -1) {
-                        pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
-                        append(line.substring(i + 2, end))
-                        pop()
-                        i = end + 2
-                        continue
-                    }
-                }
-                // Italic *text*
-                if (line[i] == '*') {
-                    val end = line.indexOf('*', i + 1)
-                    if (end != -1) {
-                        pushStyle(SpanStyle(fontStyle = FontStyle.Italic))
-                        append(line.substring(i + 1, end))
-                        pop()
-                        i = end + 1
-                        continue
-                    }
-                }
-                // Inline code `text`
-                if (line[i] == '`') {
-                    val end = line.indexOf('`', i + 1)
-                    if (end != -1) {
-                        pushStyle(
-                            SpanStyle(
-                                fontFamily = FontFamily.Monospace,
-                                background = SurfaceRaised,
-                                color = Accent
-                            )
-                        )
-                        append(line.substring(i + 1, end))
-                        pop()
-                        i = end + 1
-                        continue
-                    }
-                }
-                append(line[i])
-                i++
-            }
-            if (lineIdx < lines.size - 1) append('\n')
-        }
-    }
-}

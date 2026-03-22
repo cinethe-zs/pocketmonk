@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -26,8 +27,18 @@ class MainActivity : ComponentActivity() {
                 NavHost(navController = navController, startDestination = "launch") {
 
                     composable("launch") {
+                        val context = LocalContext.current
                         LaunchedEffect(Unit) {
-                            // Check for a previously selected model or any downloaded file
+                            // If a previous crash was detected, go to setup so the user
+                            // sees the crash banner and can choose what to do next.
+                            if (PocketMonkApp.getLastCrash(context) != null) {
+                                navController.navigate("setup") {
+                                    popUpTo("launch") { inclusive = true }
+                                }
+                                return@LaunchedEffect
+                            }
+
+                            // Auto-load a known-good model path, or the first local file found
                             val savedPath = viewModel.modelManager.getActiveModelPath()
                             val localFiles = viewModel.modelManager.listLocalFiles()
                             when {
@@ -59,15 +70,22 @@ class MainActivity : ComponentActivity() {
                             viewModel = viewModel,
                             onModelReady = { modelPath ->
                                 viewModel.initModel(modelPath)
-                                navController.navigate("chat") {
-                                    popUpTo("setup") { inclusive = true }
+                                // If "chat" is already in the back stack (user came from chat),
+                                // pop back to it. Otherwise navigate fresh to chat.
+                                if (!navController.popBackStack("chat", inclusive = false)) {
+                                    navController.navigate("chat") {
+                                        popUpTo("setup") { inclusive = true }
+                                    }
                                 }
                             }
                         )
                     }
 
                     composable("chat") {
-                        ChatScreen(viewModel = viewModel)
+                        ChatScreen(
+                            viewModel = viewModel,
+                            onNavigateToDownload = { navController.navigate("setup") }
+                        )
                     }
                 }
             }

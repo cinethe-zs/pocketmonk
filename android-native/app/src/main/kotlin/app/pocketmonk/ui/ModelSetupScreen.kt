@@ -23,6 +23,9 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.platform.LocalContext
+import app.pocketmonk.PocketMonkApp
 import app.pocketmonk.service.DownloadState
 import app.pocketmonk.service.ModelEntry
 import app.pocketmonk.ui.theme.*
@@ -44,6 +47,9 @@ fun ModelSetupScreen(
         }
     }
 
+    val context = LocalContext.current
+    var lastCrash by remember { mutableStateOf(PocketMonkApp.getLastCrash(context)) }
+
     var hfToken    by remember { mutableStateOf(manager.getHfToken() ?: "") }
     var tokenVisible by remember { mutableStateOf(false) }
     var tokenSaved by remember { mutableStateOf(manager.hasHfToken()) }
@@ -57,6 +63,36 @@ fun ModelSetupScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(48.dp))
+
+        // ── Crash banner (shown after a native MediaPipe crash) ──────────────
+        if (lastCrash != null) {
+            Row(
+                verticalAlignment = Alignment.Top,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Error.copy(alpha = 0.15f))
+                    .border(1.dp, Error.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                    .padding(12.dp)
+            ) {
+                Text(
+                    text = lastCrash!!,
+                    color = Error,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = {
+                        PocketMonkApp.clearLastCrash(context)
+                        lastCrash = null
+                    },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = Error, modifier = Modifier.size(16.dp))
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
 
         // ── Header ──────────────────────────────────────────────────────────
 

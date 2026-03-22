@@ -27,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
@@ -48,6 +50,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,6 +80,7 @@ import androidx.compose.ui.graphics.Color
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
+    onNavigateToDownload: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val conversations by viewModel.conversations.collectAsState()
@@ -85,21 +89,79 @@ fun ChatScreen(
     val isCompressing by viewModel.isCompressing.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val modelReady by viewModel.modelReady.collectAsState()
+    val streamingText by viewModel.streamingText.collectAsState()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    // Show last crash from previous session if any (clears on dismiss)
+    var lastCrash by remember {
+        mutableStateOf(app.pocketmonk.PocketMonkApp.getLastCrash(context))
+    }
+
     var inputText by rememberSaveable { mutableStateOf("") }
     var showSystemPromptBar by remember { mutableStateOf(false) }
+    var showNewConversationDialog by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     val messages = currentConversation?.messages ?: emptyList()
+    val showScrollToBottom by remember { derivedStateOf { listState.canScrollForward } }
+
+    val modelName = remember(currentConversation?.modelPath) {
+        val path = currentConversation?.modelPath ?: return@remember ""
+        val filename = java.io.File(path).name
+        viewModel.modelManager.catalog.find { it.filename == filename }?.name
+            ?: filename.substringBeforeLast('.')
+    }
+
+    // If no conversation yet and model is still loading, show a loading screen
+    if (currentConversation == null && !modelReady) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Background),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(24.dp)
+            ) {
+                if (lastCrash != null) {
+                    // Show previous crash instead of spinner
+                    Text(
+                        "Previous crash detected:",
+                        color = Error,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = lastCrash!!,
+                        color = Error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    androidx.compose.material3.CircularProgressIndicator(color = Accent)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Loading model…", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+        return
+    }
+
+    // Clear crash log once we're past loading
+    if (lastCrash != null) {
+        app.pocketmonk.PocketMonkApp.clearLastCrash(context)
+        lastCrash = null
+    }
 
     // Auto-scroll to bottom on new messages
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+            listState.animateScrollToItem(messages.size)
         }
     }
 
@@ -107,7 +169,7 @@ fun ChatScreen(
     val lastMsgContent = messages.lastOrNull()?.content
     LaunchedEffect(lastMsgContent) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+            listState.animateScrollToItem(messages.size)
         }
     }
 
@@ -118,7 +180,7 @@ fun ChatScreen(
                 conversations = conversations,
                 currentConversationId = currentConversation?.id,
                 onSelect = { viewModel.loadConversation(it) },
-                onNew = { viewModel.newConversation() },
+                onNew = { showNewConversationDialog = true; scope.launch { drawerState.close() } },
                 onDelete = { viewModel.deleteConversation(it) },
                 onAddTag = { conv, tag -> viewModel.addTag(conv, tag) },
                 onRemoveTag = { conv, tag -> viewModel.removeTag(conv, tag) },
@@ -137,29 +199,40 @@ fun ChatScreen(
             // Top App Bar
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = currentConversation?.title ?: "PocketMonk",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = TextPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        // Status dot
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(
-                                    when {
-                                        isGenerating -> Color(0xFFFFC107)
-                                        modelReady -> Success
-                                        else -> TextMuted
-                                    }
-                                )
-                        )
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = currentConversation?.title ?: "PocketMonk",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            // Status dot
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(
+                                        when {
+                                            isGenerating -> Color(0xFFFFC107)
+                                            modelReady -> Success
+                                            else -> TextMuted
+                                        }
+                                    )
+                            )
+                        }
+                        if (modelName.isNotBlank()) {
+                            Text(
+                                text = modelName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -168,6 +241,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onNavigateToDownload) {
+                        Icon(Icons.Filled.Download, contentDescription = "Models", tint = TextSecondary)
+                    }
                     IconButton(onClick = { showSystemPromptBar = !showSystemPromptBar }) {
                         Icon(Icons.Filled.Tune, contentDescription = "System Prompt", tint = if (showSystemPromptBar) Accent else TextSecondary)
                     }
@@ -184,7 +260,7 @@ fun ChatScreen(
                     }) {
                         Icon(Icons.Filled.Share, contentDescription = "Export", tint = TextSecondary)
                     }
-                    IconButton(onClick = { viewModel.newConversation() }) {
+                    IconButton(onClick = { showNewConversationDialog = true }) {
                         Icon(Icons.Filled.Add, contentDescription = "New Chat", tint = TextSecondary)
                     }
                 },
@@ -210,6 +286,10 @@ fun ChatScreen(
                     onReset = {
                         viewModel.setSystemPrompt(null)
                         showSystemPromptBar = false
+                    },
+                    onRename = {
+                        viewModel.renameConversation()
+                        showSystemPromptBar = false
                     }
                 )
             }
@@ -217,26 +297,50 @@ fun ChatScreen(
             // Message list
             val lastAssistantIndex = messages.indexOfLast { it.role == app.pocketmonk.model.MessageRole.ASSISTANT && !it.isSummary }
 
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                itemsIndexed(messages, key = { _, msg -> msg.id }) { index, message ->
-                    MessageBubble(
-                        message = message,
-                        messageIndex = index,
-                        isLastAssistant = index == lastAssistantIndex,
-                        isGenerating = isGenerating,
-                        onStar = { viewModel.toggleStarMessage(message.id) },
-                        onEdit = { newContent -> viewModel.editMessageAt(index, newContent) },
-                        onFork = { viewModel.forkConversationAt(index) },
-                        onRegenerate = { viewModel.regenerateLastResponse() },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    itemsIndexed(messages, key = { _, msg -> msg.id }) { index, message ->
+                        MessageBubble(
+                            message = message,
+                            messageIndex = index,
+                            isLastAssistant = index == lastAssistantIndex,
+                            isGenerating = isGenerating,
+                            streamingText = streamingText,
+                            onStar = { viewModel.toggleStarMessage(message.id) },
+                            onEdit = { newContent -> viewModel.editMessageAt(index, newContent) },
+                            onFork = { viewModel.forkConversationAt(index) },
+                            onRegenerate = { viewModel.regenerateLastResponse() },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                    }
+                    item { Spacer(Modifier.height(8.dp)) }
                 }
-                item { Spacer(Modifier.height(8.dp)) }
+
+                if (showScrollToBottom) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                    ) {
+                        IconButton(
+                            onClick = { scope.launch { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size) } },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(SurfaceRaised)
+                        ) {
+                            Icon(
+                                Icons.Filled.KeyboardArrowDown,
+                                contentDescription = "Scroll to bottom",
+                                tint = Accent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
             }
 
             // Error banner
@@ -272,6 +376,20 @@ fun ChatScreen(
                 canCompress = !isGenerating && (currentConversation?.messages?.count { !it.isSummary } ?: 0) > 4,
                 onCompress = { viewModel.compressContext() }
             )
+
+            // New conversation dialog
+            if (showNewConversationDialog) {
+                NewConversationDialog(
+                    modelManager = viewModel.modelManager,
+                    currentModelPath = viewModel.modelManager.getActiveModelPath(),
+                    currentContextSize = currentConversation?.contextSize ?: 2048,
+                    onConfirm = { modelPath, contextSize ->
+                        showNewConversationDialog = false
+                        viewModel.newConversation(modelPath, contextSize)
+                    },
+                    onDismiss = { showNewConversationDialog = false }
+                )
+            }
 
             // Chat input bar
             Surface(

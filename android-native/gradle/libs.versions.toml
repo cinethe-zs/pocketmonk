@@ -11,7 +11,7 @@ okhttp = "4.12.0"
 coroutinesAndroid = "1.10.1"
 coreKtx = "1.16.0"
 appcompat = "1.7.0"
-mediapipeTasksGenai = "0.10.14"
+mediapipeTasksGenai = "0.10.24"
 
 [libraries]
 mediapipe-tasks-genai = { group = "com.google.mediapipe", name = "tasks-genai", version.ref = "mediapipeTasksGenai" }

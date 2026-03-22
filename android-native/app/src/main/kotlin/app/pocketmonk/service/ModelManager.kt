@@ -51,22 +51,22 @@ class ModelManager(private val context: Context) {
             recommendedForPixel7a = true,
         ),
         ModelEntry(
-            id = "gemma2-2b-int4",
-            name = "Gemma 2 2B IT (INT4)",
-            filename = "gemma2-2b-it-int4.task",
-            sizeLabel = "~1.3 GB",
-            description = "Good balance of speed and quality.",
-            hfRepo = "litert-community/Gemma2-2B-IT",
-            hfFilename = "gemma2-2b-it-int4.task",
+            id = "gemma3-1b-int4-4k",
+            name = "Gemma 3 1B IT (INT4, 4096 ctx)",
+            filename = "Gemma3-1B-IT_multi-prefill-seq_q4_block128_ekv4096.task",
+            sizeLabel = "~700 MB",
+            description = "Larger context window (4096 tokens).",
+            hfRepo = "litert-community/Gemma3-1B-IT",
+            hfFilename = "Gemma3-1B-IT_multi-prefill-seq_q4_block128_ekv4096.task",
         ),
         ModelEntry(
             id = "gemma2-2b-int8",
             name = "Gemma 2 2B IT (INT8)",
-            filename = "gemma2-2b-it-int8.task",
+            filename = "Gemma2-2B-IT_multi-prefill-seq_q8_ekv1280.task",
             sizeLabel = "~2.6 GB",
-            description = "Best quality, slowest. Needs 3+ GB free RAM.",
+            description = "Better quality, needs 3+ GB free RAM.",
             hfRepo = "litert-community/Gemma2-2B-IT",
-            hfFilename = "gemma2-2b-it-int8.task",
+            hfFilename = "Gemma2-2B-IT_multi-prefill-seq_q8_ekv1280.task",
         ),
     )
 
@@ -110,6 +110,9 @@ class ModelManager(private val context: Context) {
     fun setActiveModelPath(path: String) =
         prefs.edit().putString("active_model_path", path).apply()
 
+    fun clearActiveModelPath() =
+        prefs.edit().remove("active_model_path").apply()
+
     // ── Download ─────────────────────────────────────────────────────────────
 
     /**
@@ -138,8 +141,9 @@ class ModelManager(private val context: Context) {
             when (code) {
                 401, 403 -> throw Exception(
                     "Access denied (HTTP $code). " +
-                    "Make sure you accepted the Gemma license on huggingface.co " +
-                    "and that your token is correct."
+                    "Accept the license at huggingface.co/${entry.hfRepo} " +
+                    "(different from google/gemma — each repo requires its own acceptance). " +
+                    "Also verify your token is a valid Read token."
                 )
                 404 -> throw Exception(
                     "Model file not found (HTTP 404). " +

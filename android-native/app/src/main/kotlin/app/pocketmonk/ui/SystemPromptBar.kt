@@ -36,6 +36,7 @@ fun SystemPromptBar(
     onSave: (String) -> Unit,
     onCancel: () -> Unit,
     onReset: () -> Unit,
+    onRename: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var text by rememberSaveable(initialValue) { mutableStateOf(initialValue) }
@@ -80,6 +81,10 @@ fun SystemPromptBar(
             horizontalArrangement = Arrangement.End,
             modifier = Modifier.fillMaxWidth()
         ) {
+            TextButton(onClick = onRename) {
+                Text("Rename", color = TextSecondary)
+            }
+            Spacer(Modifier.weight(1f))
             if (hasCustomPrompt) {
                 TextButton(onClick = onReset) {
                     Text("Reset", color = Error)
