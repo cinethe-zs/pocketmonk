@@ -150,15 +150,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             },
             onDone = {
                 viewModelScope.launch(Dispatchers.Main) {
-                    assistantMessage.content = _streamingText.value
-                    assistantMessage.status = MessageStatus.DONE
+                    val finalText = _streamingText.value
+                    assistantMessage.content = finalText.ifBlank { "*(no response — tap ↺ to retry)*" }
+                    assistantMessage.status = if (finalText.isBlank()) MessageStatus.ERROR else MessageStatus.DONE
                     _streamingText.value = ""
                     _isGenerating.value = false
                     _currentConversation.value = conv.copy(messages = conv.messages)
 
-                    // Auto-title after first exchange
-                    if (conv.title == "New Conversation" && conv.messages.size == 2) {
-                        autoGenerateTitle(conv, userMessage.content, assistantMessage.content)
+                    // Auto-title after first exchange (skip if response was empty)
+                    if (finalText.isNotBlank() && conv.title == "New Conversation" && conv.messages.size == 2) {
+                        autoGenerateTitle(conv, userMessage.content, finalText)
                     }
 
                     // Auto-compress after generation if still above threshold
@@ -189,7 +190,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val conv = _currentConversation.value ?: return
         val lastMsg = conv.messages.lastOrNull()
         if (lastMsg?.status == MessageStatus.STREAMING) {
-            lastMsg.content = _streamingText.value
+            val stopped = _streamingText.value
+            lastMsg.content = stopped.ifBlank { "*(stopped — tap ↺ to retry)*" }
             lastMsg.status = MessageStatus.DONE
             _currentConversation.value = conv.copy(messages = conv.messages)
         }
