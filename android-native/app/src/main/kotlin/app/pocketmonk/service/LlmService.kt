@@ -82,15 +82,27 @@ class LlmService(private val context: Context) {
 
             session.addQueryChunk(prompt)
 
+            // Watchdog: if no token arrives within 45 s, cancel and report error
+            val watchdog = Runnable {
+                if (isInferring) {
+                    cancel()
+                    mainHandler.post { onError("Generation timed out — context may be too long. Tap ↺ to retry.") }
+                }
+            }
+            mainHandler.postDelayed(watchdog, 45_000)
+
             val accumulated = StringBuilder()
             session.generateResponseAsync { partial, done ->
                 if (!isInferring) return@generateResponseAsync
                 if (!partial.isNullOrEmpty()) {
                     accumulated.append(partial)
+                    // Reset watchdog on each received token
+                    mainHandler.removeCallbacks(watchdog)
                     val snapshot = accumulated.toString()
                     mainHandler.post { onPartial(snapshot) }
                 }
                 if (done) {
+                    mainHandler.removeCallbacks(watchdog)
                     mainHandler.post {
                         isInferring = false
                         currentSession = null
@@ -117,10 +129,10 @@ class LlmService(private val context: Context) {
         val prompt = buildString {
             append("<start_of_turn>user\n")
             if (existingSummary != null) {
-                append("Here is a summary of earlier conversation:\n$existingSummary\n\n")
-                append("Now extend the summary to include the following new exchanges, in 2-4 sentences total, preserving key facts:\n\n")
+                append("Earlier summary: $existingSummary\n\n")
+                append("Extend it to cover the new exchanges below. Reply with one concise paragraph only:\n\n")
             } else {
-                append("Summarize the following conversation in 2-3 sentences, preserving key facts:\n\n")
+                append("Summarize this conversation in 1-2 sentences. Reply with the summary only:\n\n")
             }
             append(textToSummarize)
             append("<end_of_turn>\n")

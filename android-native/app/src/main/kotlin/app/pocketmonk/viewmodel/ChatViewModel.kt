@@ -120,7 +120,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // Auto-compress before generating if context is near the limit
         val ratio = estimatedTokenCount.toFloat() / contextLength
-        if (ratio > 0.85f && conv.messages.count { !it.isSummary } > 4) {
+        val activeCount = conv.messages.count { !it.isSummary && !it.isArchived }
+        if (ratio > 0.70f && activeCount > 4) {
             _pendingSendText = text
             compressContext()
             return
@@ -176,7 +177,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                     // Auto-compress after generation if still above threshold
                     val postRatio = estimatedTokenCount.toFloat() / contextLength
-                    if (postRatio > 0.85f && conv.messages.count { !it.isSummary } > 6) {
+                    val postActiveCount = conv.messages.count { !it.isSummary && !it.isArchived }
+                    if (postRatio > 0.70f && postActiveCount > 4) {
                         compressContext()
                     } else {
                         persistCurrentConversation()
@@ -228,11 +230,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         conv.messages.remove(lastUser)
         _currentConversation.value = conv.copy(messages = conv.messages)
 
-        // If context is already above 60% compress first, then send.
+        // If context is already above 40% compress first, then send.
         // This handles the case where the model returned empty because
         // the prompt left too little room for the response.
         val ratio = estimatedTokenCount.toFloat() / contextLength
-        if (ratio > 0.60f) {
+        if (ratio > 0.40f) {
             _pendingSendText = lastUserMsg
             compressContext()
         } else {
@@ -283,7 +285,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun compressContext(keepLast: Int = 4) {
+    fun compressContext(keepLast: Int = 3) {
         val conv = _currentConversation.value ?: return
         if (_isCompressing.value) return
 
