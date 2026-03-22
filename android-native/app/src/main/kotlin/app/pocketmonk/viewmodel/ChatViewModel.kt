@@ -102,6 +102,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         newConversation()
                     }
                 }
+                checkAndAutoRetry()
             } catch (e: Throwable) {
                 _errorMessage.value = "Failed to load model: ${e.javaClass.simpleName}: ${e.message}"
                 _modelReady.value = false
@@ -370,6 +371,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun loadConversation(conv: Conversation) {
         _currentConversation.value = conv
         _errorMessage.value = null
+        checkAndAutoRetry()
     }
 
     fun deleteConversation(id: String) {
@@ -530,6 +532,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (idx >= 0) {
             list[idx] = conv
             _conversations.value = list
+        }
+    }
+
+    private fun checkAndAutoRetry() {
+        val conv = _currentConversation.value ?: return
+        if (!_modelReady.value || _isGenerating.value || _isCompressing.value) return
+        val lastActive = conv.messages.lastOrNull { !it.isArchived && !it.isSummary }
+        if (lastActive?.status == MessageStatus.ERROR && lastActive.role == MessageRole.ASSISTANT) {
+            regenerateLastResponse()
         }
     }
 
