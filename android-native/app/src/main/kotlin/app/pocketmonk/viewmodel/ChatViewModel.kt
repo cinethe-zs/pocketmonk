@@ -164,24 +164,42 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             onDone = {
                 viewModelScope.launch(Dispatchers.Main) {
                     val finalText = _streamingText.value
-                    assistantMessage.content = finalText.ifBlank { "*(no response — tap ↺ to retry)*" }
-                    assistantMessage.status = if (finalText.isBlank()) MessageStatus.ERROR else MessageStatus.DONE
                     _streamingText.value = ""
                     _isGenerating.value = false
-                    _currentConversation.value = conv.copy(messages = conv.messages)
 
-                    // Auto-title after first exchange (skip if response was empty)
-                    if (finalText.isNotBlank() && conv.title == "New Conversation" && conv.messages.size == 2) {
-                        autoGenerateTitle(conv, userMessage.content, finalText)
-                    }
-
-                    // Auto-compress after generation if still above threshold
-                    val postRatio = estimatedTokenCount.toFloat() / contextLength
-                    val postActiveCount = conv.messages.count { !it.isSummary && !it.isArchived }
-                    if (postRatio > 0.70f && postActiveCount > 4) {
-                        compressContext()
+                    if (finalText.isBlank()) {
+                        // Empty response — auto-compress and retry if context is large enough,
+                        // otherwise surface the error for manual retry.
+                        val ratio = estimatedTokenCount.toFloat() / contextLength
+                        val activeCount = conv.messages.count { !it.isSummary && !it.isArchived }
+                        if (ratio > 0.40f && activeCount > 3) {
+                            conv.messages.remove(assistantMessage)
+                            conv.messages.remove(userMessage)
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            _pendingSendText = userMessage.content
+                            compressContext()
+                        } else {
+                            assistantMessage.content = "*(no response — tap ↺ to retry)*"
+                            assistantMessage.status = MessageStatus.ERROR
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            persistCurrentConversation()
+                        }
                     } else {
-                        persistCurrentConversation()
+                        assistantMessage.content = finalText
+                        assistantMessage.status = MessageStatus.DONE
+                        _currentConversation.value = conv.copy(messages = conv.messages)
+
+                        if (conv.title == "New Conversation" && conv.messages.size == 2) {
+                            autoGenerateTitle(conv, userMessage.content, finalText)
+                        }
+
+                        val postRatio = estimatedTokenCount.toFloat() / contextLength
+                        val postActiveCount = conv.messages.count { !it.isSummary && !it.isArchived }
+                        if (postRatio > 0.70f && postActiveCount > 4) {
+                            compressContext()
+                        } else {
+                            persistCurrentConversation()
+                        }
                     }
                 }
             },
