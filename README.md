@@ -3,137 +3,105 @@
 > Fully offline, private AI assistant for Android.
 > No cloud. No subscriptions. No data ever leaves your device.
 
-**Target:** Google Pixel 7a (Tensor G2, 8 GB RAM) · Android 9+ arm64
-
----
-
-## Features
-
-| Feature | Description |
-|---------|-------------|
-| **On-device inference** | llama.cpp via fllama — zero network calls during chat |
-| **Streaming responses** | Tokens appear as they're generated |
-| **Markdown rendering** | Code blocks, bold, lists, tables in assistant replies |
-| **Voice input** | Tap the mic to dictate — speech-to-text via Android STT |
-| **Message actions** | Long-press any bubble: star, edit, copy, regenerate |
-| **Conversation persistence** | All chats saved locally as JSON |
-| **Search & tags** | Search across all conversations; tag and filter them |
-| **Dual-model quick-swap** | Set a primary + secondary model, swap with one tap |
-| **Per-conversation system prompt** | Override the AI persona per chat |
-| **Export** | Copy any conversation to clipboard as Markdown |
-| **GPU layer config** | Optionally offload layers to GPU; auto-falls back to CPU |
+**Target:** Google Pixel 7a (Tensor G2, 8 GB RAM) · Android 9+ · arm64
 
 ---
 
 ## Install
 
-1. Download **`pocketmonkv1.0.0.apk`** from the [Releases page](../../releases/latest)
+1. Download **`pocketmonk-v2.0.0.apk`** from the [Releases page](../../releases/latest)
 2. On Android: **Settings → Security → Install unknown apps** → allow your file manager
 3. Open the APK and tap **Install**
-4. Launch PocketMonk — on first run choose a model to download (~2–4 GB)
+4. Launch PocketMonk — on first run, download a model (~600 MB–2.6 GB)
 
 ---
 
-## Build from source
+## v2.0 — Native Kotlin app (current)
 
-### Prerequisites
+The app has been fully rewritten in **Kotlin + Jetpack Compose** using **MediaPipe LLM Inference** for on-device inference. The Flutter app remains in this repository for reference.
 
-| Tool | Version |
-|------|---------|
-| Flutter | 3.41+ via [puro](https://puro.dev) |
-| Android NDK | **27.0.12077973** |
-| Android SDK | API 36 |
-| Java | 21 (Android Studio JBR) |
+### Features
 
-### Steps
+| Feature | Description |
+|---------|-------------|
+| **True token streaming** | Responses appear word by word as the model generates |
+| **Markdown rendering** | Headings, fenced code blocks with copy button, lists, blockquotes, inline formatting |
+| **Per-conversation model & context** | Choose model and context window (512 / 1K / 2K / 4K) at conversation creation |
+| **In-app model download** | Download models from HuggingFace LiteRT directly in the app |
+| **Auto-rename** | Conversation titles auto-generated after the first exchange; manual rename via system prompt panel |
+| **Context compression** | Auto-compresses history at 85% usage, queues pending messages |
+| **Conversation management** | Search, tag filtering, fork, star, edit, regenerate, export |
+| **Scroll-to-bottom button** | Appears when scrolled up in long conversations |
+| **Crash guard** | Detects native crashes on next launch and shows diagnostics |
+
+### Build from source
+
+**Prerequisites:** Android Studio 2025+, JDK 21, Android SDK API 36
 
 ```bash
 git clone https://github.com/cinethe-zs/pocketmonk.git
-cd pocketmonk
-flutter pub get
-cd android && ./gradlew assembleDebug
+cd pocketmonk/android-native
+./gradlew assembleDebug
 ```
 
-APK: `build/app/outputs/flutter-apk/app-debug.apk`
+APK: `app/build/outputs/apk/debug/app-debug.apk`
 
-> Use `assembleRelease` for production — debug mode is ~10× slower for LLM inference.
-
----
-
-## Model catalogue
+### Model catalogue
 
 | Model | Size | Notes |
 |-------|------|-------|
-| **Gemma 3 4B** Q4\_K\_M | ~2.5 GB | Best quality · recommended |
-| **Phi-4 Mini 3.8B** Q4\_K\_M | ~2.5 GB | Strong reasoning · fast |
-| **Qwen 2.5 3B** Q4\_K\_M | ~1.9 GB | Lightest · minimal RAM |
+| **Gemma 3 1B IT** INT4 | ~600 MB | Fastest · recommended for Pixel 7a |
+| **Gemma 3 1B IT** INT4 4096 ctx | ~700 MB | Larger context window |
+| **Gemma 2 2B IT** INT8 | ~2.6 GB | Better quality · needs 3+ GB free RAM |
 
-Models are downloaded from [Hugging Face / bartowski](https://huggingface.co/bartowski) and stored at:
-`Android/data/app.pocketmonk/files/models/`
+Models are downloaded from [HuggingFace LiteRT community](https://huggingface.co/litert-community) and require a free HuggingFace token and Gemma license acceptance.
 
----
-
-## Project structure
+### Project structure
 
 ```
-lib/
-├── main.dart                      # Bootstrap, routing, model switching
-├── theme/app_theme.dart           # Dark colour palette
-├── models/
-│   ├── message.dart               # Message + MessageRole + serialisation
-│   └── conversation.dart          # Conversation + tags + system prompt
-├── services/
-│   ├── llm_service.dart           # fllama wrapper, streaming, GPU fallback
-│   ├── chat_provider.dart         # ChangeNotifier — conversation state
-│   ├── model_manager.dart         # Download manager, dual-model, GPU prefs
-│   └── conversation_store.dart    # JSON persistence
-└── ui/
-    ├── chat_screen.dart           # Main UI, drawer, system prompt, export
-    ├── chat_input_bar.dart        # Text input + mic + send/stop
-    ├── message_bubble.dart        # Bubbles, long-press menu, regenerate
-    ├── model_setup_screen.dart    # First-run wizard
-    └── settings_screen.dart       # Model management + GPU settings
+android-native/
+└── app/src/main/kotlin/app/pocketmonk/
+    ├── MainActivity.kt              # Navigation host
+    ├── PocketMonkApp.kt             # Crash guard
+    ├── model/                       # Conversation, Message data classes
+    ├── repository/                  # JSON persistence (Gson)
+    ├── service/
+    │   ├── LlmService.kt            # MediaPipe inference + streaming
+    │   └── ModelManager.kt          # Download manager, HF API
+    ├── viewmodel/ChatViewModel.kt   # MVVM state (StateFlow)
+    └── ui/
+        ├── ChatScreen.kt            # Main chat UI
+        ├── MarkdownContent.kt       # Block-level markdown renderer
+        ├── MessageBubble.kt         # User / assistant bubbles
+        ├── ConversationDrawer.kt    # Side drawer with search & tags
+        ├── ModelSetupScreen.kt      # First-run / model download screen
+        ├── NewConversationDialog.kt # Model + context picker
+        ├── SystemPromptBar.kt       # Inline system prompt editor
+        └── ContextBar.kt            # Token usage bar
 ```
 
 ---
 
-## Configuration
+## v1.0 — Flutter app (legacy)
 
-`LlmConfig` defaults (in `llm_service.dart`):
+The original Flutter app using **fllama** (llama.cpp bindings) and GGUF models. Kept in `lib/` and `android/` for reference.
 
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| `contextLength` | 4096 | Reduce to 2048 to save ~400 MB RAM |
-| `temperature` | 0.7 | Higher = more creative |
-| `topP` | 0.9 | Nucleus sampling |
-| `maxTokens` | 2048 | Max tokens per response |
-| `numGpuLayers` | 0 | GPU layer count; 0 = CPU only |
+| Feature | Description |
+|---------|-------------|
+| On-device inference | llama.cpp via fllama, CPU-only |
+| Voice input | Android STT |
+| Dual-model quick-swap | Primary + secondary model, swap in one tap |
+| GPU layer config | Experimental GPU offload |
 
 ---
 
-## Performance (Pixel 7a)
+## Performance (Pixel 7a, Gemma 3 1B INT4)
 
 | Metric | Observed |
 |--------|----------|
-| Cold start | 5–15 s |
-| First token | 2–4 s |
-| Speed (3B Q4) | 5–10 tok/s |
-| RAM during inference | ~3–4 GB |
-
----
-
-## Dependencies
-
-| Package | Purpose |
-|---------|---------|
-| `fllama` (git) | llama.cpp Flutter bindings |
-| `flutter_markdown` | Markdown rendering |
-| `speech_to_text` | Voice input |
-| `provider` | State management |
-| `path_provider` | Device storage paths |
-| `shared_preferences` | Model + GPU prefs persistence |
-| `http` | Model downloads |
-| `uuid` | Conversation IDs |
+| Cold start | 5–10 s |
+| Tokens per second | 10–20 tok/s |
+| RAM during inference | ~1.5 GB |
 
 ---
 
@@ -141,6 +109,7 @@ lib/
 
 | Version | Feature |
 |---------|---------|
-| v1.0 | Chat, model download, conversations, voice input ✓ |
-| v1.1 | Voice output (Piper TTS) |
-| v2.0 | GPU acceleration (Vulkan / NNAPI) |
+| v1.0 | Flutter app — chat, model download, voice input ✓ |
+| v2.0 | Native Kotlin rewrite — streaming, markdown, UX ✓ |
+| v2.1 | Voice input (Android STT) |
+| v3.0 | GPU inference (Vulkan / NNAPI) |
