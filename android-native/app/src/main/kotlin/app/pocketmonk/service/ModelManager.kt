@@ -68,15 +68,6 @@ class ModelManager(private val context: Context) {
             hfRepo = "litert-community/Gemma2-2B-IT",
             hfFilename = "Gemma2-2B-IT_multi-prefill-seq_q8_ekv1280.task",
         ),
-        ModelEntry(
-            id = "gemma3-4b-int4",
-            name = "Gemma 3 4B IT (INT4)",
-            filename = "gemma3-4b-it-int4-web.task",
-            sizeLabel = "~2.6 GB",
-            description = "Best quality available. Needs 3+ GB free RAM. Experimental — report issues if it fails to load.",
-            hfRepo = "litert-community/Gemma3-4B-IT",
-            hfFilename = "gemma3-4b-it-int4-web.task",
-        ),
     )
 
     // ── Directory & file helpers ─────────────────────────────────────────────

@@ -44,7 +44,7 @@ class MessageBubble extends StatelessWidget {
 void _showMessageMenu(
   BuildContext context, {
   required Message message,
-  void Function(String)? onEdit,
+  VoidCallback? onEditRequested,
   VoidCallback? onToggleStar,
   VoidCallback? onFork,
 }) {
@@ -88,14 +88,14 @@ void _showMessageMenu(
             ),
 
           // Edit (user messages only)
-          if (onEdit != null)
+          if (onEditRequested != null)
             ListTile(
               leading: const Icon(Icons.edit_rounded, color: AppTheme.textMuted),
               title: const Text('Edit message',
                   style: TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
               onTap: () {
                 Navigator.pop(context);
-                _showEditDialog(context, message.content, onEdit);
+                onEditRequested();
               },
             ),
 
@@ -136,64 +136,9 @@ void _showMessageMenu(
   );
 }
 
-void _showEditDialog(
-  BuildContext context,
-  String initialText,
-  void Function(String) onEdit,
-) {
-  final controller = TextEditingController(text: initialText);
-  showDialog(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: AppTheme.surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: const Text('Edit message',
-          style: TextStyle(color: AppTheme.textPrimary, fontSize: 16)),
-      content: TextField(
-        controller:  controller,
-        autofocus:   true,
-        maxLines:    8,
-        minLines:    2,
-        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-        decoration: InputDecoration(
-          filled:    true,
-          fillColor: AppTheme.surfaceRaised,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: AppTheme.border),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: AppTheme.accent),
-          ),
-          contentPadding: const EdgeInsets.all(12),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Cancel',
-              style: TextStyle(color: AppTheme.textSecondary)),
-        ),
-        TextButton(
-          onPressed: () {
-            final text = controller.text.trim();
-            if (text.isNotEmpty) {
-              Navigator.pop(ctx);
-              onEdit(text);
-            }
-          },
-          child: const Text('Send',
-              style: TextStyle(color: AppTheme.accent, fontWeight: FontWeight.w600)),
-        ),
-      ],
-    ),
-  ).then((_) => controller.dispose());
-}
-
 // ── User bubble ──────────────────────────────────────────────────────────────
 
-class _UserBubble extends StatelessWidget {
+class _UserBubble extends StatefulWidget {
   final Message message;
   final void Function(String)? onEdit;
   final VoidCallback? onToggleStar;
@@ -207,7 +152,114 @@ class _UserBubble extends StatelessWidget {
   });
 
   @override
+  State<_UserBubble> createState() => _UserBubbleState();
+}
+
+class _UserBubbleState extends State<_UserBubble> {
+  bool _editing = false;
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _startEditing() {
+    _ctrl.text = widget.message.content;
+    setState(() => _editing = true);
+  }
+
+  void _submit() {
+    final text = _ctrl.text.trim();
+    if (text.isNotEmpty && widget.onEdit != null) {
+      setState(() => _editing = false);
+      widget.onEdit!(text);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_editing) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 24, bottom: 16),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          decoration: BoxDecoration(
+            color:        AppTheme.surfaceRaised,
+            borderRadius: BorderRadius.circular(14),
+            border:       Border.all(color: AppTheme.accent.withAlpha(120)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              TextField(
+                controller: _ctrl,
+                autofocus:  true,
+                maxLines:   8,
+                minLines:   2,
+                style: const TextStyle(
+                    color: AppTheme.textPrimary, fontSize: 15),
+                decoration: InputDecoration(
+                  filled:    true,
+                  fillColor: AppTheme.surface,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppTheme.border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppTheme.accent),
+                  ),
+                  contentPadding: const EdgeInsets.all(12),
+                  isDense: true,
+                ),
+                onSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    onPressed: () => setState(() => _editing = false),
+                    style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        minimumSize: const Size(0, 32)),
+                    child: const Text('Cancel',
+                        style: TextStyle(
+                            color: AppTheme.textSecondary, fontSize: 13)),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: _submit,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      minimumSize: const Size(0, 32),
+                      elevation: 0,
+                    ),
+                    child: const Text('Send',
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.only(left: 48, bottom: 16),
       child: Align(
@@ -218,12 +270,10 @@ class _UserBubble extends StatelessWidget {
             GestureDetector(
               onLongPress: () => _showMessageMenu(
                 context,
-                message:      message,
-                onEdit:       onEdit != null
-                    ? (text) => onEdit!(text)
-                    : null,
-                onToggleStar: onToggleStar,
-                onFork:       onFork,
+                message:         widget.message,
+                onEditRequested: widget.onEdit != null ? _startEditing : null,
+                onToggleStar:    widget.onToggleStar,
+                onFork:          widget.onFork,
               ),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -239,7 +289,7 @@ class _UserBubble extends StatelessWidget {
                       color: AppTheme.accentDim.withOpacity(0.4)),
                 ),
                 child: Text(
-                  message.content,
+                  widget.message.content,
                   style: const TextStyle(
                     color:    AppTheme.textPrimary,
                     fontSize: 15,
@@ -248,7 +298,7 @@ class _UserBubble extends StatelessWidget {
                 ),
               ),
             ),
-            if (message.starred)
+            if (widget.message.starred)
               const Padding(
                 padding: EdgeInsets.only(top: 4, right: 4),
                 child: Icon(Icons.star_rounded,

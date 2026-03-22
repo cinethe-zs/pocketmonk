@@ -29,14 +29,15 @@ class ChatProvider extends ChangeNotifier {
   Conversation?      get currentConversation => _current;
   List<Conversation> get allConversations    => List.unmodifiable(_allConversations);
 
-  int get contextLength => _llm.config?.contextLength ?? 4096;
+  int get contextLength => _llm.config?.contextLength ?? 2048;
 
   /// Rough token estimate: ~4 chars per token (English average).
+  /// Only counts real turns (not summary cards, which go into the system prompt).
   int get estimatedTokenCount {
     if (_current == null) return 0;
     int chars = 0;
     for (final m in _current!.messages) {
-      chars += m.content.length;
+      if (!m.isSummary) chars += m.content.length;
     }
     return (chars / 4).round();
   }

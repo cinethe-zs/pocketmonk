@@ -256,6 +256,7 @@ fun ModelSetupScreen(
                     onDownload  = { viewModel.downloadModel(entry) },
                     onCancel    = { viewModel.cancelDownload() },
                     onUse       = { viewModel.useLocalModel(manager.modelFile(entry).absolutePath) },
+                    onDelete    = { viewModel.deleteModel(entry) },
                 )
             }
 
@@ -292,7 +293,30 @@ private fun ModelCard(
     onDownload: () -> Unit,
     onCancel: () -> Unit,
     onUse: () -> Unit,
+    onDelete: () -> Unit,
 ) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete model?", color = TextPrimary) },
+            text = { Text("${entry.name} will be removed from the device.", color = TextMuted, fontSize = 13.sp) },
+            confirmButton = {
+                TextButton(onClick = { showDeleteConfirm = false; onDelete() }) {
+                    Text("Delete", color = Error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = Surface,
+            titleContentColor = TextPrimary,
+        )
+    }
+
     val isThisDownloading = downloadState is DownloadState.Downloading &&
             (downloadState as DownloadState.Downloading).modelId == entry.id
     val isAnyDownloading  = downloadState is DownloadState.Downloading
@@ -376,15 +400,24 @@ private fun ModelCard(
                     Text("Cancel", fontSize = 12.sp)
                 }
 
-                isDownloaded -> Button(
-                    onClick = onUse,
-                    colors = ButtonDefaults.buttonColors(containerColor = Success),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                ) {
-                    Icon(Icons.Rounded.CheckCircle, null, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Use model", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                isDownloaded -> {
+                    IconButton(
+                        onClick = { showDeleteConfirm = true },
+                        modifier = Modifier.size(36.dp),
+                    ) {
+                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete", tint = Error, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Button(
+                        onClick = onUse,
+                        colors = ButtonDefaults.buttonColors(containerColor = Success),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                    ) {
+                        Icon(Icons.Rounded.CheckCircle, null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Use model", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
 
                 else -> Button(

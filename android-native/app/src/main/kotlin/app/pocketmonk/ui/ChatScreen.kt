@@ -43,6 +43,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -127,25 +128,42 @@ fun ChatScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.padding(24.dp)
             ) {
-                if (lastCrash != null) {
-                    // Show previous crash instead of spinner
-                    Text(
-                        "Previous crash detected:",
-                        color = Error,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = lastCrash!!,
-                        color = Error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    androidx.compose.material3.CircularProgressIndicator(color = Accent)
-                    Spacer(Modifier.height(16.dp))
-                    Text("Loading model…", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                when {
+                    lastCrash != null -> {
+                        Text(
+                            "Previous crash detected:",
+                            color = Error,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = lastCrash!!,
+                            color = Error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    errorMessage != null -> {
+                        Text(
+                            text = errorMessage!!,
+                            color = Error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Button(onClick = {
+                            viewModel.dismissError()
+                            onNavigateToDownload()
+                        }) {
+                            Text("Choose another model")
+                        }
+                    }
+                    else -> {
+                        androidx.compose.material3.CircularProgressIndicator(color = Accent)
+                        Spacer(Modifier.height(16.dp))
+                        Text("Loading model…", color = TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
         }

@@ -16,7 +16,7 @@ class LlmConfig {
 
   const LlmConfig({
     required this.modelPath,
-    this.contextLength = 4096,
+    this.contextLength = 2048,
     this.temperature   = 0.7,
     this.topP          = 0.9,
     this.maxTokens     = 2048,

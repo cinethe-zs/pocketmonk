@@ -98,6 +98,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Throwable) {
                 _errorMessage.value = "Failed to load model: ${e.javaClass.simpleName}: ${e.message}"
                 _modelReady.value = false
+                // Clear the saved path so the next launch doesn't retry this broken model
+                modelManager.clearActiveModelPath()
             }
         }
     }
@@ -442,6 +444,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissDownloadError() {
         _downloadState.value = DownloadState.Idle
+    }
+
+    fun deleteModel(entry: ModelEntry) {
+        modelManager.deleteModel(entry)
     }
 
     fun useLocalModel(path: String) {

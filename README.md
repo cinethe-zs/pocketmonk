@@ -53,7 +53,6 @@ APK: `app/build/outputs/apk/debug/app-debug.apk`
 | **Gemma 3 1B IT** INT4 | ~600 MB | Fastest · recommended for Pixel 7a |
 | **Gemma 3 1B IT** INT4 4096 ctx | ~700 MB | Larger context window |
 | **Gemma 2 2B IT** INT8 | ~2.6 GB | Better quality · needs 3+ GB free RAM |
-| **Gemma 3 4B IT** INT4 | ~2.6 GB | Best quality · experimental · needs 3+ GB free RAM |
 
 Models are downloaded from [HuggingFace LiteRT community](https://huggingface.co/litert-community) and require a free HuggingFace token and Gemma license acceptance.
 
