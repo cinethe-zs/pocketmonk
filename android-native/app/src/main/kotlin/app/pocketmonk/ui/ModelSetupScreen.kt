@@ -40,7 +40,13 @@ fun ModelSetupScreen(
     val downloadState by viewModel.downloadState.collectAsState()
     val manager = viewModel.modelManager
 
-    // Navigate away when download completes
+    // Reset Done state so re-opening this screen doesn't instantly navigate away
+    LaunchedEffect(Unit) {
+        viewModel.dismissDownloadError()
+        if (downloadState is DownloadState.Done) viewModel.resetDownloadState()
+    }
+
+    // Navigate away only when a new download/use completes
     LaunchedEffect(downloadState) {
         if (downloadState is DownloadState.Done) {
             onModelReady((downloadState as DownloadState.Done).modelPath)
@@ -53,7 +59,7 @@ fun ModelSetupScreen(
     var hfToken    by remember { mutableStateOf(manager.getHfToken() ?: "") }
     var tokenVisible by remember { mutableStateOf(false) }
     var tokenSaved by remember { mutableStateOf(manager.hasHfToken()) }
-    val localFiles = remember { manager.listLocalFiles() }
+    var localFiles by remember { mutableStateOf(manager.listLocalFiles()) }
 
     Column(
         modifier = Modifier
@@ -273,7 +279,11 @@ fun ModelSetupScreen(
                     )
                 }
                 items(extras) { f ->
-                    LocalFileCard(file = f, onUse = { viewModel.useLocalModel(f.absolutePath) })
+                    LocalFileCard(
+                        file = f,
+                        onUse = { viewModel.useLocalModel(f.absolutePath) },
+                        onDelete = { f.delete(); localFiles = manager.listLocalFiles() },
+                    )
                 }
             }
 
@@ -446,7 +456,28 @@ private fun ModelCard(
 // ── Local file card ───────────────────────────────────────────────────────────
 
 @Composable
-private fun LocalFileCard(file: File, onUse: () -> Unit) {
+private fun LocalFileCard(file: File, onUse: () -> Unit, onDelete: () -> Unit) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete file?", color = TextPrimary) },
+            text = { Text(file.name, color = TextMuted, fontSize = 13.sp) },
+            confirmButton = {
+                TextButton(onClick = { showDeleteConfirm = false; onDelete() }) {
+                    Text("Delete", color = Error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = Surface,
+        )
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -462,7 +493,10 @@ private fun LocalFileCard(file: File, onUse: () -> Unit) {
             Text(file.name, color = TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text("${"%.1f".format(file.length() / 1_048_576.0)} MB", color = TextMuted, fontSize = 11.sp)
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(4.dp))
+        IconButton(onClick = { showDeleteConfirm = true }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete", tint = Error, modifier = Modifier.size(18.dp))
+        }
         TextButton(
             onClick = onUse,
             colors = ButtonDefaults.textButtonColors(contentColor = Accent),

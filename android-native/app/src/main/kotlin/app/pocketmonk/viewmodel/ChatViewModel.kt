@@ -446,6 +446,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _downloadState.value = DownloadState.Idle
     }
 
+    fun resetDownloadState() {
+        _downloadState.value = DownloadState.Idle
+    }
+
     fun deleteModel(entry: ModelEntry) {
         modelManager.deleteModel(entry)
     }
