@@ -188,8 +188,8 @@ class LlmService(private val context: Context) {
             append("<start_of_turn>user\n")
             append("Extract only the facts relevant to answering: \"$originalQuestion\"\n")
             append("Research angle: \"$subQuery\"\n\n")
-            append("Content:\n${pageContent.take(3000)}\n\n")
-            append("Reply with 2-4 sentences of relevant facts only. If nothing is relevant, reply exactly: SKIP")
+            append("Content:\n${pageContent.take(8000)}\n\n")
+            append("Reply with up to 8 concise bullet points of relevant facts only. If nothing is relevant, reply exactly: SKIP")
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
         try {

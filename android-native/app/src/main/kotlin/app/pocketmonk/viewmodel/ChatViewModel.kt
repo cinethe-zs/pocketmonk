@@ -273,13 +273,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             withContext(Dispatchers.Main) {
                                 _searchStatus.value = "Extracting from ${result.displayUrl.ifBlank { result.title }}…"
                             }
-                            // Compress large pages before extraction so the extract prompt fits in context
-                            val contentForExtraction = if (content.length > 4000) {
-                                runCatching { llmService.compressText(content, subQuery) }.getOrNull()
-                                    ?: content.take(4000)
-                            } else content
                             val info = runCatching {
-                                llmService.extractRelevantInfo(contentForExtraction, subQuery, query)
+                                llmService.extractRelevantInfo(content, subQuery, query)
                             }.getOrNull()
                             if (!info.isNullOrBlank()) {
                                 findings.add(Triple(subQuery, result.title, info))
