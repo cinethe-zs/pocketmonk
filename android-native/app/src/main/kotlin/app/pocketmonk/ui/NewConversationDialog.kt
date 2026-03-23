@@ -17,10 +17,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +40,7 @@ import app.pocketmonk.ui.theme.TextMuted
 import app.pocketmonk.ui.theme.TextPrimary
 import app.pocketmonk.ui.theme.TextSecondary
 import java.io.File
+import kotlin.math.roundToInt
 
 private val CONTEXT_SIZES = listOf(512, 1024, 2048, 4096)
 
@@ -46,7 +50,8 @@ fun NewConversationDialog(
     modelManager: ModelManager,
     currentModelPath: String?,
     currentContextSize: Int,
-    onConfirm: (modelPath: String, contextSize: Int) -> Unit,
+    currentTemperature: Float = 1.0f,
+    onConfirm: (modelPath: String, contextSize: Int, temperature: Float) -> Unit,
     onDismiss: () -> Unit
 ) {
     val localFiles = remember { modelManager.listLocalFiles() }
@@ -55,6 +60,7 @@ fun NewConversationDialog(
     val initialPath = currentModelPath ?: localFiles.firstOrNull()?.absolutePath ?: ""
     var selectedPath by remember { mutableStateOf(initialPath) }
     var selectedContextSize by remember { mutableIntStateOf(currentContextSize) }
+    var selectedTemperature by remember { mutableFloatStateOf(currentTemperature) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -67,21 +73,13 @@ fun NewConversationDialog(
             )
         },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState())
-            ) {
-                Text(
-                    "Model",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = TextMuted
-                )
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+
+                // ── Model ────────────────────────────────────────────────────
+                Text("Model", style = MaterialTheme.typography.labelMedium, color = TextMuted)
                 Spacer(Modifier.height(8.dp))
                 if (localFiles.isEmpty()) {
-                    Text(
-                        "No models found",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted
-                    )
+                    Text("No models found", style = MaterialTheme.typography.bodySmall, color = TextMuted)
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         localFiles.forEach { file ->
@@ -99,11 +97,9 @@ fun NewConversationDialog(
                 }
 
                 Spacer(Modifier.height(16.dp))
-                Text(
-                    "Context Size",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = TextMuted
-                )
+
+                // ── Context size ─────────────────────────────────────────────
+                Text("Context Size", style = MaterialTheme.typography.labelMedium, color = TextMuted)
                 Spacer(Modifier.height(8.dp))
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -117,12 +113,56 @@ fun NewConversationDialog(
                         )
                     }
                 }
+
+                Spacer(Modifier.height(16.dp))
+
+                // ── Temperature ──────────────────────────────────────────────
+                val tempLabel = when {
+                    selectedTemperature < 0.4f -> "Precise"
+                    selectedTemperature < 0.8f -> "Balanced"
+                    selectedTemperature < 1.3f -> "Creative"
+                    else                       -> "Wild"
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Temperature", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+                    Text(
+                        "${"%.1f".format(selectedTemperature)}  ·  $tempLabel",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Accent
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Slider(
+                    value = selectedTemperature,
+                    onValueChange = {
+                        // Snap to nearest 0.1
+                        selectedTemperature = ((it * 10).roundToInt() / 10f)
+                    },
+                    valueRange = 0.1f..2.0f,
+                    steps = 18,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Accent,
+                        activeTrackColor = Accent,
+                        inactiveTrackColor = Border
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("0.1", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                    Text("2.0", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (selectedPath.isNotBlank()) onConfirm(selectedPath, selectedContextSize)
+                    if (selectedPath.isNotBlank()) onConfirm(selectedPath, selectedContextSize, selectedTemperature)
                 },
                 enabled = selectedPath.isNotBlank()
             ) {
@@ -138,15 +178,9 @@ fun NewConversationDialog(
 }
 
 @Composable
-private fun ModelRow(
-    name: String,
-    subtitle: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
+private fun ModelRow(name: String, subtitle: String, isSelected: Boolean, onClick: () -> Unit) {
     val bg = if (isSelected) Accent.copy(alpha = 0.15f) else Background
     val borderColor = if (isSelected) Accent else Border
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -167,7 +201,6 @@ private fun ModelRow(
 private fun ContextSizeChip(label: String, isSelected: Boolean, onClick: () -> Unit) {
     val bg = if (isSelected) Accent.copy(alpha = 0.15f) else Background
     val borderColor = if (isSelected) Accent else Border
-
     Text(
         text = label,
         style = MaterialTheme.typography.bodyMedium,

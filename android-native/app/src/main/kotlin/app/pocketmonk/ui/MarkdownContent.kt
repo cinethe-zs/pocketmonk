@@ -17,15 +17,25 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -35,13 +45,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.pocketmonk.ui.theme.Accent
+import app.pocketmonk.ui.theme.Border
+import app.pocketmonk.ui.theme.Success
 import app.pocketmonk.ui.theme.SurfaceRaised
+import app.pocketmonk.ui.theme.TextMuted
 import app.pocketmonk.ui.theme.TextPrimary
 import app.pocketmonk.ui.theme.TextSecondary
+import app.pocketmonk.util.FileSaver
 
 private sealed class MdBlock {
     data class Heading(val level: Int, val text: String) : MdBlock()
-    data class CodeBlock(val code: String) : MdBlock()
+    data class CodeBlock(val language: String, val code: String) : MdBlock()
     data class BulletItem(val text: String) : MdBlock()
     data class NumberedItem(val number: Int, val text: String) : MdBlock()
     data class BlockQuote(val text: String) : MdBlock()
@@ -72,6 +86,16 @@ fun MarkdownContent(text: String, modifier: Modifier = Modifier) {
 
                 is MdBlock.CodeBlock -> {
                     val clipboard = LocalClipboardManager.current
+                    val context = LocalContext.current
+                    var showSaveDialog by remember { mutableStateOf(false) }
+                    var savedPath by remember { mutableStateOf<String?>(null) }
+
+                    val ext = FileSaver.extensionFor(block.language)
+                    val defaultName = remember(block.language) {
+                        val ts = System.currentTimeMillis() / 1000
+                        "pocketmonk_$ts.$ext"
+                    }
+
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -85,12 +109,25 @@ fun MarkdownContent(text: String, modifier: Modifier = Modifier) {
                                 .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 0.dp)
                         ) {
                             Text(
-                                text = "code",
+                                text = block.language.ifBlank { "code" },
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 10.sp,
                                 color = TextSecondary,
                                 modifier = Modifier.weight(1f)
                             )
+                            // Save to file
+                            IconButton(
+                                onClick = { showSaveDialog = true },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.SaveAlt,
+                                    contentDescription = "Save as file",
+                                    tint = if (savedPath != null) Success else TextSecondary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            // Copy
                             IconButton(
                                 onClick = { clipboard.setText(AnnotatedString(block.code)) },
                                 modifier = Modifier.size(28.dp)
@@ -117,8 +154,31 @@ fun MarkdownContent(text: String, modifier: Modifier = Modifier) {
                                 lineHeight = 18.sp
                             )
                         }
+                        if (savedPath != null) {
+                            Text(
+                                text = "Saved to $savedPath",
+                                fontSize = 10.sp,
+                                color = Success,
+                                modifier = Modifier.padding(start = 10.dp, bottom = 6.dp)
+                            )
+                        }
                     }
                     Spacer(Modifier.height(2.dp))
+
+                    if (showSaveDialog) {
+                        SaveFileDialog(
+                            defaultName = defaultName,
+                            onSave = { filename ->
+                                showSaveDialog = false
+                                runCatching {
+                                    FileSaver.save(context, filename, block.code)
+                                }.onSuccess { path ->
+                                    savedPath = path
+                                }
+                            },
+                            onDismiss = { showSaveDialog = false }
+                        )
+                    }
                 }
 
                 is MdBlock.BulletItem -> {
@@ -190,6 +250,7 @@ private fun parseBlocks(text: String): List<MdBlock> {
 
         // Fenced code block
         if (line.trimStart().startsWith("```")) {
+            val language = line.trimStart().removePrefix("```").trim()
             val codeLines = mutableListOf<String>()
             i++
             while (i < lines.size && !lines[i].trimStart().startsWith("```")) {
@@ -197,7 +258,7 @@ private fun parseBlocks(text: String): List<MdBlock> {
                 i++
             }
             if (codeLines.isNotEmpty()) {
-                result.add(MdBlock.CodeBlock(codeLines.joinToString("\n")))
+                result.add(MdBlock.CodeBlock(language, codeLines.joinToString("\n")))
             }
             i++ // skip closing ```
             continue
@@ -247,6 +308,49 @@ private fun parseBlocks(text: String): List<MdBlock> {
     }
 
     return result
+}
+
+@Composable
+private fun SaveFileDialog(
+    defaultName: String,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var filename by remember { mutableStateOf(defaultName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceRaised,
+        title = {
+            Text("Save file", style = MaterialTheme.typography.titleMedium, color = TextPrimary)
+        },
+        text = {
+            OutlinedTextField(
+                value = filename,
+                onValueChange = { filename = it },
+                label = { Text("Filename", color = TextMuted) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Accent,
+                    unfocusedBorderColor = Border,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    cursorColor = Accent,
+                    focusedContainerColor = SurfaceRaised,
+                    unfocusedContainerColor = SurfaceRaised
+                )
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (filename.isNotBlank()) onSave(filename.trim()) },
+                enabled = filename.isNotBlank()
+            ) { Text("Save", color = Accent) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = TextSecondary) }
+        }
+    )
 }
 
 private fun inlineSpans(text: String): AnnotatedString = buildAnnotatedString {

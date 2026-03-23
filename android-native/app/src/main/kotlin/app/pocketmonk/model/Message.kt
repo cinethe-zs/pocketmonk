@@ -13,5 +13,6 @@ data class Message(
     val createdAt: Long = System.currentTimeMillis(),
     var starred: Boolean = false,
     var isSummary: Boolean = false,
-    var isArchived: Boolean = false
+    var isArchived: Boolean = false,
+    var isSearchResult: Boolean = false
 )

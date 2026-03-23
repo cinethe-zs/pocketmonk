@@ -12,6 +12,7 @@ import app.pocketmonk.service.DownloadState
 import app.pocketmonk.service.LlmService
 import app.pocketmonk.service.ModelEntry
 import app.pocketmonk.service.ModelManager
+import app.pocketmonk.service.WebSearchService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +27,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = ConversationRepository(application)
     val llmService = LlmService(application)
     val modelManager = ModelManager(application)
+    private val webSearchService = WebSearchService()
 
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
@@ -43,6 +45,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isCompressing = MutableStateFlow(false)
     val isCompressing: StateFlow<Boolean> = _isCompressing.asStateFlow()
+
+    private val _isSearching = MutableStateFlow(false)
+    val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    private val _searchStatus = MutableStateFlow<String?>(null)
+    val searchStatus: StateFlow<String?> = _searchStatus.asStateFlow()
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
@@ -156,6 +164,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             history = historyForPrompt,
             systemPrompt = conv.systemPrompt,
             contextSummary = contextSummary,
+            temperature = conv.temperature,
             onPartial = { partial ->
                 viewModelScope.launch(Dispatchers.Main) {
                     if (_isGenerating.value) {
@@ -221,6 +230,169 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun searchAndSend(query: String, level: Int = 2) {
+        val conv = _currentConversation.value ?: return
+        if (!_modelReady.value || _isGenerating.value || _isCompressing.value || _isSearching.value) return
+
+        _isSearching.value = true
+        _searchStatus.value = "Fetching results…"
+        _errorMessage.value = null
+
+        viewModelScope.launch {
+            try {
+                // ── Level 4: Mega Deep agentic pipeline ──────────────────────
+                if (level == 4) {
+                    withContext(Dispatchers.Main) { _searchStatus.value = "Planning research queries…" }
+
+                    val subQueries = llmService.generateSearchQueries(query)
+                    if (subQueries.isEmpty()) {
+                        // Fallback to Super Deep if query generation fails
+                        withContext(Dispatchers.Main) {
+                            _isSearching.value = false
+                            _searchStatus.value = null
+                        }
+                        return@launch
+                    }
+
+                    // For each sub-query: search + per-page extraction
+                    val findings = mutableListOf<Triple<String, String, String>>() // (subQuery, title, info)
+                    val queriesUsed = mutableListOf<String>()
+
+                    for (subQuery in subQueries) {
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Searching: \"$subQuery\"…" }
+                        queriesUsed.add(subQuery)
+
+                        val subResults = runCatching {
+                            webSearchService.search(subQuery, 0, contextLength)
+                        }.getOrNull() ?: continue
+
+                        var extracted = 0
+                        for (result in subResults) {
+                            if (extracted >= 2) break
+                            val content = result.pageContent ?: continue
+                            withContext(Dispatchers.Main) {
+                                _searchStatus.value = "Extracting from ${result.displayUrl.ifBlank { result.title }}…"
+                            }
+                            // Compress large pages before extraction so the extract prompt fits in context
+                            val contentForExtraction = if (content.length > 4000) {
+                                runCatching { llmService.compressText(content, subQuery) }.getOrNull()
+                                    ?: content.take(4000)
+                            } else content
+                            val info = runCatching {
+                                llmService.extractRelevantInfo(contentForExtraction, subQuery, query)
+                            }.getOrNull()
+                            if (!info.isNullOrBlank()) {
+                                findings.add(Triple(subQuery, result.title, info))
+                                extracted++
+                            }
+                        }
+                    }
+
+                    // Synthesize all findings
+                    var synthesis: String? = null
+                    if (findings.isNotEmpty()) {
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Synthesizing research…" }
+                        synthesis = runCatching {
+                            llmService.synthesizeResearch(query, findings)
+                        }.getOrNull()
+                    }
+
+                    // Format research result message
+                    val formatted = buildString {
+                        appendLine("[Mega Deep Research: \"$query\"]")
+                        appendLine("Queries used: ${queriesUsed.joinToString(" · ")}")
+                        if (!synthesis.isNullOrBlank()) {
+                            appendLine()
+                            appendLine("Synthesis:")
+                            appendLine(synthesis)
+                        }
+                        if (findings.isNotEmpty()) {
+                            appendLine()
+                            appendLine("Research notes:")
+                            findings.groupBy { it.first }.forEach { (q, items) ->
+                                appendLine("— $q —")
+                                items.forEach { (_, title, info) -> appendLine("• $title: $info") }
+                            }
+                        }
+                    }.trim()
+
+                    withContext(Dispatchers.Main) {
+                        if (findings.isNotEmpty() || synthesis != null) {
+                            val searchMsg = Message(
+                                role = MessageRole.USER,
+                                content = formatted,
+                                isSearchResult = true
+                            )
+                            conv.messages.add(searchMsg)
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                        }
+                        _isSearching.value = false
+                        _searchStatus.value = null
+                        sendMessage(query)
+                    }
+                    return@launch
+                }
+
+                // ── Levels 1–3: standard search pipeline ─────────────────────
+                var results = webSearchService.search(query, level, contextLength)
+                var synthesis: String? = null
+
+                if (level >= 2 && results.isNotEmpty()) {
+                    // ── Stage 1: compress each page individually ──────────────
+                    val pagesWithContent = results.count { it.pageContent != null }
+                    results = results.mapIndexed { i, result ->
+                        val raw = result.pageContent ?: return@mapIndexed result
+                        withContext(Dispatchers.Main) {
+                            _searchStatus.value = "Compressing page ${i + 1} / $pagesWithContent…"
+                        }
+                        val compressed = runCatching {
+                            llmService.compressText(raw, query)
+                        }.getOrNull()
+                        result.copy(pageContent = compressed ?: raw.take(300))
+                    }
+
+                    // ── Stage 2: synthesize all stage-1 summaries ─────────────
+                    val allSummaries = results.mapIndexedNotNull { i, r ->
+                        r.pageContent?.let { "${i + 1}. ${r.title}: $it" }
+                    }.joinToString("\n")
+
+                    if (allSummaries.isNotBlank()) {
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Synthesizing findings…" }
+                        synthesis = runCatching {
+                            llmService.compressText(allSummaries, query)
+                        }.getOrNull()
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (results.isEmpty()) {
+                        _isSearching.value = false
+                        _searchStatus.value = null
+                        sendMessage(query)
+                        return@withContext
+                    }
+                    val formatted = webSearchService.format(query, results, synthesis)
+                    val searchMsg = Message(
+                        role = MessageRole.USER,
+                        content = formatted,
+                        isSearchResult = true
+                    )
+                    conv.messages.add(searchMsg)
+                    _currentConversation.value = conv.copy(messages = conv.messages)
+                    _isSearching.value = false
+                    _searchStatus.value = null
+                    sendMessage(query)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _isSearching.value = false
+                    _searchStatus.value = null
+                    _errorMessage.value = "Search failed: ${e.message ?: "unknown error"}"
+                }
+            }
+        }
+    }
+
     fun stopGeneration() {
         llmService.cancel()
         _isGenerating.value = false
@@ -247,10 +419,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _currentConversation.value = conv.copy(messages = conv.messages)
         }
 
-        // Find and remove last active user message
-        val lastUser = conv.messages.lastOrNull { it.role == MessageRole.USER && !it.isArchived }
+        // Find and remove last active user message (skip search result messages)
+        val lastUser = conv.messages.lastOrNull { it.role == MessageRole.USER && !it.isArchived && !it.isSearchResult }
         val lastUserMsg = lastUser?.content ?: return
+        // Also remove the preceding search result message if any
+        val lastUserIdx = conv.messages.indexOf(lastUser)
+        val precedingSearch = if (lastUserIdx > 0) conv.messages[lastUserIdx - 1].takeIf { it.isSearchResult } else null
         conv.messages.remove(lastUser)
+        if (precedingSearch != null) conv.messages.remove(precedingSearch)
         _currentConversation.value = conv.copy(messages = conv.messages)
 
         // If context is already above 40% compress first, then send.
@@ -351,9 +527,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun newConversation(modelPath: String? = null, contextSize: Int? = null) {
+    fun newConversation(modelPath: String? = null, contextSize: Int? = null, temperature: Float? = null) {
         val path = modelPath ?: currentModelPath ?: return
         val size = contextSize ?: currentContextSize
+        val temp = temperature ?: 1.0f
         // Re-init model if path or context size differs from what's currently loaded
         if (path != currentModelPath || size != currentContextSize) {
             initModel(path, size)
@@ -361,7 +538,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val conv = Conversation(
             title = "New Conversation",
             modelPath = path,
-            contextSize = size
+            contextSize = size,
+            temperature = temp
         )
         viewModelScope.launch {
             repo.save(conv)

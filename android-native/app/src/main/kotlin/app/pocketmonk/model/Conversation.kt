@@ -7,6 +7,7 @@ data class Conversation(
     var title: String,
     val modelPath: String,
     val contextSize: Int = 2048,
+    val temperature: Float = 1.0f,
     var systemPrompt: String? = null,
     val tags: MutableList<String> = mutableListOf(),
     val messages: MutableList<Message> = mutableListOf(),

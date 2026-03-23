@@ -1,6 +1,9 @@
 package app.pocketmonk.ui
 
 import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +34,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -93,6 +98,8 @@ fun ChatScreen(
     val currentConversation by viewModel.currentConversation.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
     val isCompressing by viewModel.isCompressing.collectAsState()
+    val isSearching by viewModel.isSearching.collectAsState()
+    val searchStatus by viewModel.searchStatus.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val modelReady by viewModel.modelReady.collectAsState()
     val streamingText by viewModel.streamingText.collectAsState()
@@ -109,6 +116,18 @@ fun ChatScreen(
     var inputText by rememberSaveable { mutableStateOf("") }
     var showSystemPromptBar by remember { mutableStateOf(false) }
     var showNewConversationDialog by remember { mutableStateOf(false) }
+    // 0 = off, 1 = Quick, 2 = Normal, 3 = Deep
+    var searchLevel by rememberSaveable { mutableStateOf(0) }
+
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+        if (!matches.isNullOrEmpty()) {
+            inputText = if (inputText.isBlank()) matches[0]
+                        else "${inputText.trimEnd()} ${matches[0]}"
+        }
+    }
 
     val listState = rememberLazyListState()
     val messages = currentConversation?.messages ?: emptyList()
@@ -413,9 +432,10 @@ fun ChatScreen(
                     modelManager = viewModel.modelManager,
                     currentModelPath = viewModel.modelManager.getActiveModelPath(),
                     currentContextSize = currentConversation?.contextSize ?: 2048,
-                    onConfirm = { modelPath, contextSize ->
+                    currentTemperature = currentConversation?.temperature?.takeIf { it >= 0.1f } ?: 1.0f,
+                    onConfirm = { modelPath, contextSize, temperature ->
                         showNewConversationDialog = false
-                        viewModel.newConversation(modelPath, contextSize)
+                        viewModel.newConversation(modelPath, contextSize, temperature)
                     },
                     onDismiss = { showNewConversationDialog = false }
                 )
@@ -428,64 +448,178 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .imePadding()
             ) {
-                Row(
-                    verticalAlignment = Alignment.Bottom,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        placeholder = { Text("Message…", color = TextMuted) },
-                        modifier = Modifier.weight(1f),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
-                        enabled = modelReady && !isCompressing,
-                        maxLines = 5,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Accent,
-                            unfocusedBorderColor = Border,
-                            disabledBorderColor = Border,
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            cursorColor = Accent,
-                            focusedContainerColor = Background,
-                            unfocusedContainerColor = Background,
-                            disabledContainerColor = Background
-                        )
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    // Send / Stop button
-                    IconButton(
-                        onClick = {
-                            if (isGenerating) {
-                                viewModel.stopGeneration()
-                            } else if (inputText.isNotBlank() && modelReady) {
-                                val text = inputText.trim()
-                                inputText = ""
-                                viewModel.sendMessage(text)
-                            }
-                        },
-                        enabled = modelReady && !isCompressing && (isGenerating || inputText.isNotBlank()),
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                when {
-                                    !modelReady || isCompressing -> TextMuted
-                                    isGenerating -> Error
-                                    inputText.isBlank() -> TextMuted
-                                    else -> Accent
-                                }
-                            )
+                Column {
+                    // Search level pill — visible when a level is selected or search is running
+                    AnimatedVisibility(
+                        visible = searchLevel > 0 || isSearching,
+                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
                     ) {
-                        Icon(
-                            imageVector = if (isGenerating) Icons.Filled.Stop else Icons.Filled.Send,
-                            contentDescription = if (isGenerating) "Stop" else "Send",
-                            tint = TextPrimary,
-                            modifier = Modifier.size(20.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = null,
+                                tint = Accent,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            if (isSearching && searchStatus != null) {
+                                Text(
+                                    searchStatus!!,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Accent
+                                )
+                            } else {
+                                val (levelLabel, levelDesc) = when (searchLevel) {
+                                    1 -> "Normal" to "6 results · reads top 4 pages"
+                                    2 -> "Deep" to "8 results · 6 pages · LLM-compressed"
+                                    3 -> "Super Deep" to "12 results · 8 pages · LLM-compressed"
+                                    else -> "Mega Deep" to "model plans queries · targeted extraction · synthesis"
+                                }
+                                Text(
+                                    "$levelLabel search · $levelDesc · Send to run",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Accent
+                                )
+                            }
+                            Spacer(Modifier.weight(1f))
+                            if (!isSearching) {
+                                Text(
+                                    "✕",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted,
+                                    modifier = Modifier.clickable { searchLevel = 0 }
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            placeholder = { Text("Message…", color = TextMuted) },
+                            modifier = Modifier.weight(1f),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary),
+                            enabled = modelReady && !isCompressing && !isSearching,
+                            maxLines = 5,
+                            shape = RoundedCornerShape(16.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = if (searchLevel > 0) Accent else Accent,
+                                unfocusedBorderColor = if (searchLevel > 0) Accent.copy(alpha = 0.5f) else Border,
+                                disabledBorderColor = Border,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                cursorColor = Accent,
+                                focusedContainerColor = Background,
+                                unfocusedContainerColor = Background,
+                                disabledContainerColor = Background
+                            )
                         )
+                        Spacer(Modifier.width(4.dp))
+                        // Search level button — cycles 0→1→2→3→0
+                        IconButton(
+                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 5 },
+                            enabled = modelReady && !isGenerating && !isCompressing && !isSearching,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            if (isSearching) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    color = Accent,
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Filled.Search,
+                                        contentDescription = "Web search depth",
+                                        tint = if (searchLevel > 0) Accent else TextMuted,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    if (searchLevel > 0) {
+                                        Text(
+                                            "$searchLevel",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontSize = androidx.compose.ui.unit.TextUnit(8f, androidx.compose.ui.unit.TextUnitType.Sp)
+                                            ),
+                                            color = Accent,
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(bottom = 1.dp, end = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        // Mic button
+                        IconButton(
+                            onClick = {
+                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                                }
+                                speechLauncher.launch(intent)
+                            },
+                            enabled = modelReady && !isGenerating && !isCompressing && !isSearching,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Mic,
+                                contentDescription = "Voice input",
+                                tint = if (modelReady && !isGenerating && !isCompressing && !isSearching) TextSecondary else TextMuted,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        // Send / Stop button
+                        IconButton(
+                            onClick = {
+                                if (isGenerating) {
+                                    viewModel.stopGeneration()
+                                } else if (inputText.isNotBlank() && modelReady) {
+                                    val text = inputText.trim()
+                                    inputText = ""
+                                    val level = searchLevel
+                                    searchLevel = 0
+                                    if (level > 0) {
+                                        viewModel.searchAndSend(text, level)
+                                    } else {
+                                        viewModel.sendMessage(text)
+                                    }
+                                }
+                            },
+                            enabled = modelReady && !isCompressing && !isSearching && (isGenerating || inputText.isNotBlank()),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    when {
+                                        !modelReady || isCompressing || isSearching -> TextMuted
+                                        isGenerating -> Error
+                                        inputText.isBlank() -> TextMuted
+                                        searchLevel > 0 -> Accent
+                                        else -> Accent
+                                    }
+                                )
+                        ) {
+                            Icon(
+                                imageVector = if (isGenerating) Icons.Filled.Stop else Icons.Filled.Send,
+                                contentDescription = if (isGenerating) "Stop" else "Send",
+                                tint = TextPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }

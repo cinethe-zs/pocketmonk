@@ -25,7 +25,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -86,6 +89,11 @@ fun MessageBubble(
 ) {
     if (message.isSummary) {
         SummaryCard(message = message, modifier = modifier)
+        return
+    }
+
+    if (message.isSearchResult) {
+        SearchResultCard(message = message, modifier = modifier)
         return
     }
 
@@ -411,6 +419,59 @@ private fun StreamingDots() {
                 .clip(RoundedCornerShape(50))
                 .background(Accent.copy(alpha = dot3Alpha))
         )
+    }
+}
+
+@Composable
+private fun SearchResultCard(message: Message, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+
+    // Extract the query from first line "[Web search results for "query":]"
+    val firstLine = message.content.lines().firstOrNull() ?: ""
+    val queryLabel = firstLine.removePrefix("[").removeSuffix(":]").trim()
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(SurfaceRaised)
+            .border(1.dp, Border, RoundedCornerShape(8.dp))
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                Icons.Filled.Search,
+                contentDescription = null,
+                tint = TextMuted,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                queryLabel,
+                color = TextMuted,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = TextMuted,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+        if (expanded) {
+            Text(
+                text = message.content.lines().drop(1).joinToString("\n").trim(),
+                color = TextSecondary,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
+            )
+        }
     }
 }
 
