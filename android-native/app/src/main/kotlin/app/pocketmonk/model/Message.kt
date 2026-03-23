@@ -14,5 +14,6 @@ data class Message(
     var starred: Boolean = false,
     var isSummary: Boolean = false,
     var isArchived: Boolean = false,
-    var isSearchResult: Boolean = false
+    var isSearchResult: Boolean = false,
+    var isSearchLog: Boolean = false
 )

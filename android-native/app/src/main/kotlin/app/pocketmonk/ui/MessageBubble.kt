@@ -56,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.pocketmonk.model.Message
@@ -94,6 +95,11 @@ fun MessageBubble(
 
     if (message.isSearchResult) {
         SearchResultCard(message = message, modifier = modifier)
+        return
+    }
+
+    if (message.isSearchLog) {
+        SearchLogCard(message = message, modifier = modifier)
         return
     }
 
@@ -470,6 +476,59 @@ private fun SearchResultCard(message: Message, modifier: Modifier = Modifier) {
                 color = TextSecondary,
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchLogCard(message: Message, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(true) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF0D1117))
+            .border(1.dp, Color(0xFF30363D), RoundedCornerShape(8.dp))
+    ) {
+        // Header
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                Icons.Filled.Search,
+                contentDescription = null,
+                tint = Color(0xFF58A6FF),
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Mega Deep — research log",
+                color = Color(0xFF58A6FF),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = Color(0xFF8B949E),
+                modifier = Modifier.size(16.dp)
+            )
+        }
+        // Log content
+        if (expanded) {
+            Text(
+                text = message.content.lines().drop(1).joinToString("\n").trimStart('\n'),
+                color = Color(0xFFE6EDF3),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier
+                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
             )
         }
     }

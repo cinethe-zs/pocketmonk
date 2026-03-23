@@ -411,7 +411,7 @@ class LlmService(private val context: Context) {
         append("<start_of_turn>user\n$sys<end_of_turn>\n")
         append("<start_of_turn>model\nUnderstood.<end_of_turn>\n")
 
-        val active = messages.filter { !it.isSummary }
+        val active = messages.filter { !it.isSummary && !it.isSearchLog }
         var i = 0
         while (i < active.size) {
             val m = active[i]
