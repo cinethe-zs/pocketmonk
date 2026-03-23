@@ -18,7 +18,8 @@ data class EbayScrapeResult(
     val listings: List<EbayListing>,
     val htmlChars: Int,
     val rawItemsParsed: Int,
-    val error: String? = null
+    val error: String? = null,
+    val htmlSnippet: String? = null   // first 300 chars of body, for debug
 )
 
 class EbaySearchService {
@@ -39,7 +40,8 @@ class EbaySearchService {
             EbayScrapeResult(
                 listings = listings.first,
                 htmlChars = html.length,
-                rawItemsParsed = listings.second
+                rawItemsParsed = listings.second,
+                htmlSnippet = htmlBodySnippet(html)
             )
         } catch (e: Exception) {
             EbayScrapeResult(listings = emptyList(), htmlChars = 0, rawItemsParsed = 0, error = e.message)
@@ -55,7 +57,8 @@ class EbaySearchService {
             EbayScrapeResult(
                 listings = listings.first,
                 htmlChars = html.length,
-                rawItemsParsed = listings.second
+                rawItemsParsed = listings.second,
+                htmlSnippet = htmlBodySnippet(html)
             )
         } catch (e: Exception) {
             EbayScrapeResult(listings = emptyList(), htmlChars = 0, rawItemsParsed = 0, error = e.message)
@@ -87,14 +90,13 @@ class EbaySearchService {
     private fun parseListings(html: String, isSold: Boolean): Pair<List<EbayListing>, Int> {
         val listings = mutableListOf<EbayListing>()
 
-        val itemRegex = Regex(
-            """<li[^>]*class="[^"]*s-item[^"]*"[^>]*>(.*?)</li>""",
-            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE)
-        )
-        val blocks = itemRegex.findAll(html).toList()
+        // Split by <li opening tags — avoids the nested-</li> truncation bug that hits the
+        // price span (which appears late in each item block).
+        val blocks = html.split(Regex("<li\\b", RegexOption.IGNORE_CASE))
+            .filter { it.contains("s-item", ignoreCase = true)
+                    && !it.contains("s-item__placeholder", ignoreCase = true) }
 
-        for (match in blocks) {
-            val block = match.groupValues[1]
+        for (block in blocks) {
             val title = extractTitle(block) ?: continue
             if (title.contains("Shop on eBay", ignoreCase = true)) continue
 
@@ -156,4 +158,11 @@ class EbaySearchService {
     }
 
     private fun stripTags(html: String) = html.replace(Regex("<[^>]+>"), "")
+
+    /** First 300 non-whitespace chars after <body for quick bot-detection diagnosis. */
+    private fun htmlBodySnippet(html: String): String {
+        val bodyStart = html.indexOf("<body", ignoreCase = true).takeIf { it >= 0 } ?: 0
+        return html.substring(bodyStart).replace(Regex("<[^>]+>"), " ")
+            .replace(Regex("\\s+"), " ").trim().take(300)
+    }
 }

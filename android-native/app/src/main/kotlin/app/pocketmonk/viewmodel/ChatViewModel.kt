@@ -259,11 +259,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     withContext(Dispatchers.Main) { _searchStatus.value = "eBay: scraping sold listings…" }
                     val soldResult = ebaySearchService.scrapeSold(query)
                     appendLog("  Sold HTML: ${soldResult.htmlChars} chars · ${soldResult.rawItemsParsed} blocks${if (soldResult.error != null) " ⚠ ${soldResult.error}" else ""}")
+                    if (soldResult.rawItemsParsed == 0 && soldResult.htmlSnippet != null)
+                        appendLog("  HTML snippet: ${soldResult.htmlSnippet}")
 
                     appendLog("eBay — scraping active listings…")
                     withContext(Dispatchers.Main) { _searchStatus.value = "eBay: scraping active listings…" }
                     val activeResult = ebaySearchService.scrapeActive(query)
                     appendLog("  Active HTML: ${activeResult.htmlChars} chars · ${activeResult.rawItemsParsed} blocks${if (activeResult.error != null) " ⚠ ${activeResult.error}" else ""}")
+                    if (activeResult.rawItemsParsed == 0 && activeResult.htmlSnippet != null)
+                        appendLog("  HTML snippet: ${activeResult.htmlSnippet}")
 
                     val soldClean = soldResult.listings.filter { !ebaySearchService.isForParts(it) }
                     val activeClean = activeResult.listings.filter { !ebaySearchService.isForParts(it) }
