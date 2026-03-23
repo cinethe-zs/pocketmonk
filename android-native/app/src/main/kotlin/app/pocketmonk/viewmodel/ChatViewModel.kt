@@ -399,19 +399,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     val formatted = buildString {
-                        appendLine("[Mega Deep Research: \"$query\"]")
-                        appendLine("Queries used: ${queriesUsed.joinToString(" · ")}")
                         if (!synthesis.isNullOrBlank()) {
-                            appendLine()
-                            appendLine("Synthesis:")
                             appendLine(synthesis)
-                        }
-                        if (allFindings.isNotEmpty()) {
-                            appendLine()
-                            appendLine("Research notes:")
-                            allFindings.groupBy { it.first }.forEach { (q, items) ->
-                                appendLine("— $q —")
-                                items.forEach { (_, title, info) -> appendLine("• $title: $info") }
+                        } else {
+                            // Synthesis failed — fall back to header + raw notes
+                            appendLine("[Mega Deep Research: \"$query\"]")
+                            appendLine("Queries used: ${queriesUsed.joinToString(" · ")}")
+                            if (allFindings.isNotEmpty()) {
+                                appendLine()
+                                appendLine("Research notes:")
+                                allFindings.groupBy { it.first }.forEach { (q, items) ->
+                                    appendLine("— $q —")
+                                    items.forEach { (_, title, info) -> appendLine("• $title: $info") }
+                                }
                             }
                         }
                     }.trim()
