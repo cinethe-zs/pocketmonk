@@ -294,12 +294,6 @@ class LlmService(private val context: Context) {
             val engine = llm ?: return@withContext emptyList()
             val prompt = buildString {
                 append("<start_of_turn>user\n")
-                append("You are crafting web search queries. Use these operators when helpful:\n")
-                append("- Quotes for exact phrases: \"machine learning tutorial\"\n")
-                append("- Minus to exclude terms: python -snake\n")
-                append("- site: to search a specific site: site:reddit.com\n")
-                append("- OR for alternatives: cats OR dogs\n")
-                append("- filetype: for specific file types: filetype:pdf\n\n")
                 if (gapContext.isNullOrBlank()) {
                     append("Generate 3 diverse, targeted web search queries to find information answering:\n$question\n\n")
                 } else {
