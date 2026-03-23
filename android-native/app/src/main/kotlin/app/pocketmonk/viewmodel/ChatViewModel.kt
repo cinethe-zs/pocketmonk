@@ -52,6 +52,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _searchStatus = MutableStateFlow<String?>(null)
     val searchStatus: StateFlow<String?> = _searchStatus.asStateFlow()
 
+    private val _searchLog = MutableStateFlow<String?>(null)
+    val searchLog: StateFlow<String?> = _searchLog.asStateFlow()
+
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
@@ -247,21 +250,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     val allFindings = mutableListOf<Triple<String, String, String>>()
                     val queriesUsed = mutableListOf<String>()
 
-                    // Live log message — visible in the conversation but excluded from LLM context
-                    val logMessage = Message(
-                        role = MessageRole.USER,
-                        content = "=== Mega Deep Research ===",
-                        isSearchLog = true
-                    )
-                    withContext(Dispatchers.Main) {
-                        conv.messages.add(logMessage)
-                        _currentConversation.value = conv.copy(messages = conv.messages)
-                    }
+                    // Live log — emits to a dedicated StateFlow so Compose always re-renders
+                    withContext(Dispatchers.Main) { _searchLog.value = "=== Mega Deep Research ===" }
 
                     suspend fun appendLog(line: String) {
                         withContext(Dispatchers.Main) {
-                            logMessage.content += "\n$line"
-                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            _searchLog.value = (_searchLog.value ?: "") + "\n$line"
                         }
                     }
 
@@ -408,15 +402,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }.trim()
 
                     withContext(Dispatchers.Main) {
+                        // Save the live log as a permanent message in the conversation
+                        val finalLog = _searchLog.value
+                        if (!finalLog.isNullOrBlank()) {
+                            conv.messages.add(Message(
+                                role = MessageRole.USER,
+                                content = finalLog,
+                                isSearchLog = true
+                            ))
+                        }
+                        _searchLog.value = null
+
                         if (allFindings.isNotEmpty() || synthesis != null) {
-                            val searchMsg = Message(
+                            conv.messages.add(Message(
                                 role = MessageRole.USER,
                                 content = formatted,
                                 isSearchResult = true
-                            )
-                            conv.messages.add(searchMsg)
-                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            ))
                         }
+                        _currentConversation.value = conv.copy(messages = conv.messages)
                         _isSearching.value = false
                         _searchStatus.value = null
                         sendMessage(query)

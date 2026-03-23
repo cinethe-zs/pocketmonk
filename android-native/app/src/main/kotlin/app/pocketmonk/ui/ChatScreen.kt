@@ -86,6 +86,7 @@ import app.pocketmonk.ui.theme.TextSecondary
 import app.pocketmonk.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +101,7 @@ fun ChatScreen(
     val isCompressing by viewModel.isCompressing.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
     val searchStatus by viewModel.searchStatus.collectAsState()
+    val searchLog by viewModel.searchLog.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val modelReady by viewModel.modelReady.collectAsState()
     val streamingText by viewModel.streamingText.collectAsState()
@@ -361,6 +363,14 @@ fun ChatScreen(
                                 onEdit = { newContent -> viewModel.editMessageAt(index, newContent) },
                                 onFork = { viewModel.forkConversationAt(index) },
                                 onRegenerate = { viewModel.regenerateLastResponse() },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    if (isSearching && searchLog != null) {
+                        item(key = "live_search_log") {
+                            LiveSearchLogCard(
+                                log = searchLog!!,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -627,6 +637,40 @@ fun ChatScreen(
     }
 }
 
+
+@Composable
+private fun LiveSearchLogCard(log: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .background(Color(0xFF0D1117))
+            .border(1.dp, Color(0xFF30363D), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                color = Color(0xFF58A6FF),
+                modifier = Modifier.size(10.dp),
+                strokeWidth = 1.5.dp
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Mega Deep — live research log",
+                color = Color(0xFF58A6FF),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        Text(
+            text = log.lines().drop(1).joinToString("\n").trimStart('\n'),
+            color = Color(0xFFE6EDF3),
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+        )
+    }
+}
 
 @Composable
 private fun SummaryBanner(summary: String, modifier: Modifier = Modifier) {
