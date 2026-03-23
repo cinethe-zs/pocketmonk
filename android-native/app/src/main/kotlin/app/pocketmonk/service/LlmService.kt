@@ -285,6 +285,102 @@ class LlmService(private val context: Context) {
         }
     }
 
+    /**
+     * Interprets [question] and generates a single optimized web search query.
+     * If [gapContext] is provided (from a previous iteration), targets the missing information.
+     */
+    suspend fun generateOptimizedQuery(question: String, gapContext: String? = null): String? =
+        withContext(Dispatchers.IO) {
+            val engine = llm ?: return@withContext null
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                if (gapContext.isNullOrBlank()) {
+                    append("Generate a single, highly targeted web search query that maximizes the chance of finding information to answer this question:\n\n")
+                    append(question)
+                } else {
+                    append("Question: $question\n\n")
+                    append("Previous searches did not fully answer it. What was missing:\n$gapContext\n\n")
+                    append("Generate a single, targeted web search query to find the missing information.")
+                }
+                append("\n\nReply with only the search query, nothing else.")
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            try {
+                engine.generateResponse(prompt)?.trim()
+                    ?.lines()?.firstOrNull { it.isNotBlank() }
+                    ?.trimStart('-', '*', '•', '·')?.trim()
+                    ?.ifBlank { null }
+            } catch (e: Exception) { null }
+        }
+
+    /**
+     * Scores [resultsSummary] (numbered list of title+snippet) by relevance to [question].
+     * Returns 0-based indices in ranked order.
+     */
+    suspend fun scoreResults(resultsSummary: String, question: String): List<Int> =
+        withContext(Dispatchers.IO) {
+            val engine = llm ?: return@withContext emptyList()
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Rank these search results by relevance to: \"$question\"\n\n")
+                append(resultsSummary)
+                append("\n\nReply with only the result numbers in order of relevance, most relevant first, comma-separated. Example: 3,1,7,2")
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            try {
+                val raw = engine.generateResponse(prompt)?.trim() ?: return@withContext emptyList()
+                Regex("\\d+").findAll(raw)
+                    .map { it.value.toInt() - 1 }  // 1-based → 0-based
+                    .filter { it >= 0 }
+                    .distinct()
+                    .toList()
+            } catch (e: Exception) { emptyList() }
+        }
+
+    /**
+     * Analyzes what information is still missing from [resultsSummary] to answer [question].
+     * Carries over [previousGapContext] from prior iterations.
+     */
+    suspend fun analyzeGaps(
+        resultsSummary: String,
+        question: String,
+        previousGapContext: String? = null
+    ): String? = withContext(Dispatchers.IO) {
+        val engine = llm ?: return@withContext null
+        val prompt = buildString {
+            append("<start_of_turn>user\n")
+            append("Question: \"$question\"\n\n")
+            if (!previousGapContext.isNullOrBlank()) {
+                append("Previously identified gaps:\n$previousGapContext\n\n")
+            }
+            append("Based on these search result summaries, what specific information is still missing to fully answer the question?\n\n")
+            append(resultsSummary)
+            append("\n\nReply with 2-4 sentences describing what is missing.")
+            append("<end_of_turn>\n<start_of_turn>model\n")
+        }
+        try {
+            engine.generateResponse(prompt)?.trim()?.ifBlank { null }
+        } catch (e: Exception) { null }
+    }
+
+    /**
+     * Returns true if [gatheredInfo] is sufficient to answer [question].
+     */
+    suspend fun evaluateSufficiency(gatheredInfo: String, question: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val engine = llm ?: return@withContext false
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Question: \"$question\"\n\n")
+                append("Gathered information:\n${gatheredInfo.take(4000)}\n\n")
+                append("Does this information sufficiently answer the question? Reply with only YES or NO.")
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            try {
+                engine.generateResponse(prompt)?.trim()?.startsWith("YES", ignoreCase = true) ?: false
+            } catch (e: Exception) { false }
+        }
+
     fun cancel() {
         val session = currentSession
         isInferring = false

@@ -154,6 +154,20 @@ class WebSearchService {
         return stripTags(after.substring(start + 1, end)).trim()
     }
 
+    // ── Public helpers for Mega Deep ─────────────────────────────────────────
+
+    /** Fetches DDG results without reading any pages — title, snippet and URL only. */
+    suspend fun searchMetadataOnly(query: String, maxResults: Int = 10): List<SearchResult> =
+        withContext(Dispatchers.IO) {
+            val html = runCatching { fetchDdgHtml(query) }.getOrElse { return@withContext emptyList() }
+            parseResults(html, maxResults)
+        }
+
+    /** Fetches a full page with no character cap. */
+    suspend fun fetchFullPage(url: String): String = withContext(Dispatchers.IO) {
+        runCatching { fetchPageContent(url, Int.MAX_VALUE) }.getOrElse { "" }
+    }
+
     // ── Page fetcher ──────────────────────────────────────────────────────────
 
     private fun fetchPageContent(url: String, maxChars: Int): String {
