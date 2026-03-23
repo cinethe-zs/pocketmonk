@@ -12,6 +12,7 @@ import app.pocketmonk.service.DownloadState
 import app.pocketmonk.service.LlmService
 import app.pocketmonk.service.ModelEntry
 import app.pocketmonk.service.ModelManager
+import app.pocketmonk.service.EbaySearchService
 import app.pocketmonk.service.WebSearchService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,6 +29,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val llmService = LlmService(application)
     val modelManager = ModelManager(application)
     private val webSearchService = WebSearchService()
+    private val ebaySearchService = EbaySearchService()
 
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
@@ -243,16 +245,262 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             try {
-                // ── Level 4: Mega Deep agentic pipeline ──────────────────────
-                if (level == 4) {
-                    val maxIterations = 5
+                // ── Level 6: Camera search (eBay + targeted sites + fallback) ──
+                if (level == 6) {
+                    withContext(Dispatchers.Main) { _searchLog.value = "=== Camera Search ===" }
+                    suspend fun appendLog(line: String) {
+                        withContext(Dispatchers.Main) {
+                            _searchLog.value = (_searchLog.value ?: "") + "\n$line"
+                        }
+                    }
+
+                    // ── eBay ────────────────────────────────────────────────
+                    appendLog("eBay — scraping sold listings…")
+                    withContext(Dispatchers.Main) { _searchStatus.value = "eBay: scraping sold listings…" }
+                    val soldResult = ebaySearchService.scrapeSold(query)
+                    appendLog("  Sold HTML: ${soldResult.htmlChars} chars · ${soldResult.rawItemsParsed} blocks${if (soldResult.error != null) " ⚠ ${soldResult.error}" else ""}")
+
+                    appendLog("eBay — scraping active listings…")
+                    withContext(Dispatchers.Main) { _searchStatus.value = "eBay: scraping active listings…" }
+                    val activeResult = ebaySearchService.scrapeActive(query)
+                    appendLog("  Active HTML: ${activeResult.htmlChars} chars · ${activeResult.rawItemsParsed} blocks${if (activeResult.error != null) " ⚠ ${activeResult.error}" else ""}")
+
+                    val soldClean = soldResult.listings.filter { !ebaySearchService.isForParts(it) }
+                    val activeClean = activeResult.listings.filter { !ebaySearchService.isForParts(it) }
+                    appendLog("  After parts filter: ${soldClean.size} sold · ${activeClean.size} active")
+
+                    withContext(Dispatchers.Main) { _searchStatus.value = "eBay: filtering relevant listings…" }
+                    appendLog("  LLM filtering…")
+                    val allTitles = (soldClean + activeClean).map { it.title }.take(60)
+                    val matchingIndices = if (allTitles.isNotEmpty()) {
+                        runCatching { llmService.filterEbayListings(allTitles, query) }
+                            .getOrElse { allTitles.indices.toSet() }
+                    } else emptySet()
+                    val soldMatched = soldClean.filterIndexed { i, _ -> i in matchingIndices }
+                    val activeMatched = activeClean.filterIndexed { i, _ -> (soldClean.size + i) in matchingIndices }
+                    appendLog("  After LLM filter: ${soldMatched.size} sold · ${activeMatched.size} active")
+
+                    if (soldMatched.isNotEmpty()) {
+                        appendLog("\nSold listings:")
+                        soldMatched.forEach { l ->
+                            val bo = if (l.bestOffer) " [BO]" else ""
+                            val date = if (l.soldDate != null) " · ${l.soldDate}" else ""
+                            appendLog("  ${"$"}${"%.2f".format(l.price ?: 0.0)} · ${l.condition}$bo$date · ${l.title.take(60)}")
+                        }
+                    }
+                    if (activeMatched.isNotEmpty()) {
+                        appendLog("\nActive listings:")
+                        activeMatched.forEach { l ->
+                            val bo = if (l.bestOffer) " [BO]" else ""
+                            appendLog("  ${"$"}${"%.2f".format(l.price ?: 0.0)} · ${l.condition}$bo · ${l.title.take(60)}")
+                        }
+                    }
+
+                    // ── Camera research — Option B: targeted sites ──────────
+                    appendLog("\nCamera research — targeted sites…")
+                    val cameraFindings = mutableListOf<Pair<String, String>>() // (source label, extracted text)
+
+                    // B1: DPReview
+                    withContext(Dispatchers.Main) { _searchStatus.value = "Searching DPReview…" }
+                    appendLog("  Searching DPReview…")
+                    val dpreviewDdg = runCatching {
+                        webSearchService.searchMetadataOnly("$query site:dpreview.com review", 5)
+                    }.getOrElse { emptyList() }
+                    val dpreviewUrl = dpreviewDdg.firstOrNull { it.realUrl?.contains("dpreview.com") == true }?.realUrl
+                    if (dpreviewUrl != null) {
+                        appendLog("  Fetching: $dpreviewUrl")
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Reading DPReview…" }
+                        val content = runCatching { webSearchService.fetchFullPage(dpreviewUrl) }.getOrElse { "" }
+                        if (content.isNotBlank()) {
+                            val extracted = runCatching {
+                                llmService.extractRelevantInfo(content, "camera specs review pros cons verdict", query)
+                            }.getOrNull()
+                            if (extracted != null) {
+                                cameraFindings.add(Pair("DPReview", extracted))
+                                appendLog("  DPReview: ${extracted.lines().size} facts extracted")
+                            } else appendLog("  DPReview: nothing relevant")
+                        } else appendLog("  DPReview: page fetch failed")
+                    } else appendLog("  DPReview: no URL found in DDG results")
+
+                    // B2: Dedicated specs page
+                    withContext(Dispatchers.Main) { _searchStatus.value = "Searching full specifications…" }
+                    appendLog("  Searching full specifications page…")
+                    var cameraSpecs: String? = null
+                    val specsDdg = runCatching {
+                        webSearchService.searchMetadataOnly("$query full specifications", 6)
+                    }.getOrElse { emptyList() }
+                    for (r in specsDdg) {
+                        val url = r.realUrl ?: continue
+                        appendLog("  Fetching specs: ${r.displayUrl.ifBlank { url }.take(60)}")
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Reading specs: ${r.displayUrl.take(40)}…" }
+                        val content = runCatching { webSearchService.fetchFullPage(url) }.getOrElse { "" }
+                        if (content.isBlank()) continue
+                        val specs = runCatching { llmService.extractCameraSpecs(content, query) }.getOrNull()
+                        if (specs != null) {
+                            cameraSpecs = specs
+                            appendLog("  Specs: ${specs.lines().size} fields extracted from ${r.displayUrl.take(40)}")
+                            break
+                        }
+                    }
+                    if (cameraSpecs == null) appendLog("  No specs page found")
+
+                    // B3: General review (1 non-DPReview source)
+                    withContext(Dispatchers.Main) { _searchStatus.value = "Searching specs & reviews…" }
+                    appendLog("  Searching general specs/review…")
+                    val generalDdg = runCatching {
+                        webSearchService.searchMetadataOnly("$query specifications sensor megapixels review", 6)
+                    }.getOrElse { emptyList() }
+                    for (r in generalDdg) {
+                        val url = r.realUrl ?: continue
+                        if (url.contains("dpreview.com")) continue
+                        appendLog("  Fetching: ${r.displayUrl.ifBlank { url }.take(60)}")
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Reading ${r.displayUrl.take(40)}…" }
+                        val content = runCatching { webSearchService.fetchFullPage(url) }.getOrElse { "" }
+                        if (content.isBlank()) continue
+                        val extracted = runCatching {
+                            llmService.extractRelevantInfo(content, "camera specifications sensor resolution video features", query)
+                        }.getOrNull()
+                        if (extracted != null) {
+                            cameraFindings.add(Pair(r.displayUrl.ifBlank { r.title }.take(50), extracted))
+                            appendLog("  ${r.displayUrl.take(40)}: ${extracted.lines().size} facts extracted")
+                            break
+                        }
+                    }
+
+                    // ── Option C: fallback if < 2 sources found ─────────────
+                    if (cameraFindings.size < 2) {
+                        appendLog("\nFewer than 2 sources — running deeper fallback search…")
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Deeper camera research…" }
+                        val fallbackDdg = runCatching {
+                            webSearchService.searchMetadataOnly("$query review pros cons known issues", 6)
+                        }.getOrElse { emptyList() }
+                        val alreadyFetched = setOfNotNull(dpreviewUrl) +
+                            generalDdg.mapNotNull { it.realUrl }.toSet()
+                        for (r in fallbackDdg) {
+                            if (cameraFindings.size >= 3) break
+                            val url = r.realUrl ?: continue
+                            if (url in alreadyFetched) continue
+                            appendLog("  Fetching: ${r.displayUrl.ifBlank { url }.take(60)}")
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Reading ${r.displayUrl.take(40)}…" }
+                            val content = runCatching { webSearchService.fetchFullPage(url) }.getOrElse { "" }
+                            if (content.isBlank()) continue
+                            val extracted = runCatching {
+                                llmService.extractRelevantInfo(content, "camera review pros cons issues", query)
+                            }.getOrNull() ?: continue
+                            cameraFindings.add(Pair(r.displayUrl.ifBlank { r.title }.take(50), extracted))
+                            appendLog("  ${r.displayUrl.take(40)}: ${extracted.lines().size} facts extracted")
+                        }
+                    }
+                    appendLog("\n${cameraFindings.size} research source(s) gathered.")
+
+                    // ── Build result card ────────────────────────────────────
+                    val soldPrices = soldMatched.mapNotNull { it.price }
+                    val activePrices = activeMatched.mapNotNull { it.price }
+                    val bestOfferListings = activeMatched.filter { it.bestOffer && it.price != null }
+                    val bestOfferPrices = bestOfferListings.mapNotNull { it.price }
+
+                    val result = buildString {
+                        appendLine("## Camera Search: $query")
+                        appendLine()
+
+                        // Specifications
+                        if (cameraSpecs != null) {
+                            appendLine("### Specifications")
+                            appendLine(cameraSpecs)
+                            appendLine()
+                        }
+
+                        // Camera info
+                        if (cameraFindings.isNotEmpty()) {
+                            appendLine("### Camera Info")
+                            cameraFindings.forEach { (source, text) ->
+                                appendLine("**$source**")
+                                appendLine(text)
+                                appendLine()
+                            }
+                        } else {
+                            appendLine("### Camera Info")
+                            appendLine("- No camera info found")
+                            appendLine()
+                        }
+
+                        // Sold
+                        appendLine("### eBay Sold — ${soldMatched.size} matched")
+                        appendLine("*Debug: HTML ${soldResult.htmlChars}c · ${soldResult.rawItemsParsed} blocks · ${soldClean.size} after parts · ${soldMatched.size} after LLM*")
+                        if (soldPrices.isNotEmpty()) {
+                            val last = soldMatched.firstOrNull { it.price != null }
+                            if (last != null) {
+                                val dateStr = if (last.soldDate != null) " (${last.soldDate})" else ""
+                                appendLine("- **Last sold:** ${"$"}${"%.2f".format(last.price!!)} · ${last.condition}$dateStr")
+                            }
+                            appendLine("- **Average:** ${"$"}${"%.2f".format(soldPrices.average())}")
+                            appendLine("- **Range:** ${"$"}${"%.2f".format(soldPrices.min())} – ${"$"}${"%.2f".format(soldPrices.max())}")
+                        } else appendLine("- No data")
+                        appendLine()
+
+                        // Active
+                        appendLine("### eBay Active — ${activeMatched.size} matched")
+                        appendLine("*Debug: HTML ${activeResult.htmlChars}c · ${activeResult.rawItemsParsed} blocks · ${activeClean.size} after parts · ${activeMatched.size} after LLM*")
+                        if (activePrices.isNotEmpty()) {
+                            val cheapest = activeMatched.filter { it.price != null }.minByOrNull { it.price!! }!!
+                            val bo = if (cheapest.bestOffer) " · Best Offer" else ""
+                            appendLine("- **Cheapest:** ${"$"}${"%.2f".format(cheapest.price!!)} · ${cheapest.condition}$bo")
+                            appendLine("- **Average:** ${"$"}${"%.2f".format(activePrices.average())}")
+                            appendLine("- **Range:** ${"$"}${"%.2f".format(activePrices.min())} – ${"$"}${"%.2f".format(activePrices.max())}")
+                        } else appendLine("- No data")
+                        appendLine()
+
+                        // Best Offer
+                        appendLine("### Best Offer — ${bestOfferListings.size} listings")
+                        if (bestOfferPrices.isNotEmpty()) {
+                            val cheapestBO = bestOfferListings.minByOrNull { it.price!! }!!
+                            appendLine("- **Cheapest asking:** ${"$"}${"%.2f".format(cheapestBO.price!!)} · ${cheapestBO.condition}")
+                            appendLine("- **Average asking:** ${"$"}${"%.2f".format(bestOfferPrices.average())}")
+                        } else appendLine("- None found")
+                    }.trim()
+
+                    withContext(Dispatchers.Main) {
+                        val finalLog = _searchLog.value
+                        if (!finalLog.isNullOrBlank()) {
+                            conv.messages.add(Message(role = MessageRole.USER, content = finalLog, isSearchLog = true))
+                        }
+                        _searchLog.value = null
+                        val userMsg = Message(role = MessageRole.USER, content = query)
+                        val assistantMsg = Message(role = MessageRole.ASSISTANT, content = result, status = MessageStatus.DONE)
+                        conv.messages.add(userMsg)
+                        conv.messages.add(assistantMsg)
+                        _currentConversation.value = conv.copy(messages = conv.messages)
+                        _isSearching.value = false
+                        _searchStatus.value = null
+                        persistCurrentConversation()
+                    }
+                    return@launch
+                }
+
+                // ── Levels 2–5: Deep agentic pipeline ────────────────────────
+                if (level >= 2) {
+                    // Config per level
+                    data class DeepConfig(
+                        val name: String,
+                        val maxIterations: Int,
+                        val maxPages: Int,
+                        val checkSufficiency: Boolean,  // false = always read maxPages (Forced modes)
+                        val minPagesBeforeCheck: Int    // read at least N pages before first sufficiency check
+                    )
+                    val config = when (level) {
+                        3    -> DeepConfig("Super Deep",  5,  10, true,  5)
+                        4    -> DeepConfig("5-Forced",    1,   5, false, 0)
+                        5    -> DeepConfig("10-Forced",   1,  10, false, 0)
+                        else -> DeepConfig("Deep",        5,  10, true,  0)
+                    }
+
                     var accumulatedGapContext: String? = null
                     val allFindings = mutableListOf<Triple<String, String, String>>()
                     val queriesUsed = mutableListOf<String>()
                     var overallSufficient = false
 
                     // Live log — dedicated StateFlow guarantees recomposition on every append
-                    withContext(Dispatchers.Main) { _searchLog.value = "=== Mega Deep Research ===" }
+                    withContext(Dispatchers.Main) { _searchLog.value = "=== ${config.name} Search ===" }
 
                     suspend fun appendLog(line: String) {
                         withContext(Dispatchers.Main) {
@@ -260,27 +508,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
-                    for (iteration in 1..maxIterations) {
+                    for (iteration in 1..config.maxIterations) {
                         if (overallSufficient) break
-                        appendLog("\n[Iteration $iteration / $maxIterations]")
+                        appendLog("\n[Iteration $iteration / ${config.maxIterations}]")
 
-                        // ── Step 1: Generate 3 candidate queries and pick the best ──────
+                        // ── Step 1: Generate optimized search query ──────────────────────
                         withContext(Dispatchers.Main) {
                             _searchStatus.value = if (iteration == 1) "Forging search query…"
                                                   else "Iteration $iteration: refining search query…"
                         }
-                        appendLog("Step 1 — Generating candidate queries…")
-                        val candidates = runCatching {
-                            llmService.generateQueryCandidates(query, accumulatedGapContext)
-                        }.getOrElse { emptyList() }
-                        if (candidates.isEmpty()) { appendLog("  Failed to generate queries — stopping."); break }
-                        candidates.forEach { appendLog("  > $it") }
-                        appendLog("  Picking best…")
+                        appendLog("Step 1 — Generating search query…")
                         val optimizedQuery = runCatching {
-                            llmService.pickBestQuery(candidates, query)
-                        }.getOrNull() ?: candidates.first()
+                            llmService.generateOptimizedQuery(query, accumulatedGapContext)
+                        }.getOrNull() ?: query
                         queriesUsed.add(optimizedQuery)
-                        appendLog("  Selected: \"$optimizedQuery\"")
+                        appendLog("  Query: \"$optimizedQuery\"")
 
                         // ── Step 2: Fetch 10 results (metadata only) ────────────────────
                         withContext(Dispatchers.Main) { _searchStatus.value = "Searching: \"$optimizedQuery\"…" }
@@ -314,9 +556,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             appendLog("  #${rank + 1} [$score/10] $title")
                         }
 
-                        // ── Step 4+5: Read pages one by one (all 10), check sufficiency after each ──
-                        appendLog("Step 4+5 — Reading pages & checking sufficiency…")
-                        for ((idx, relevanceScore) in allScored) {
+                        // ── Step 4+5: Read pages, optionally check sufficiency after each ──
+                        val label45 = if (config.checkSufficiency) "Step 4+5 — Reading pages & checking sufficiency…" else "Step 4 — Reading top ${config.maxPages} pages…"
+                        appendLog(label45)
+                        var pagesReadWithContent = 0
+                        for ((idx, relevanceScore) in allScored.take(config.maxPages)) {
                             if (overallSufficient) break
                             val result = results.getOrNull(idx) ?: continue
                             val url = result.realUrl
@@ -341,31 +585,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             }.getOrNull()
                             if (!extracted.isNullOrBlank()) {
                                 allFindings.add(Triple(optimizedQuery, result.title, extracted))
-                                val bulletCount = extracted.lines()
-                                    .count { it.trimStart().startsWith("-") || it.trimStart().startsWith("•") }
-                                appendLog("    -> ${if (bulletCount > 0) "$bulletCount facts extracted" else "Content extracted"}")
+                                pagesReadWithContent++
+                                extracted.lines().forEach { appendLog("      $it") }
                             } else {
                                 appendLog("    -> Nothing relevant found")
                                 continue
                             }
 
-                            // Step 5: sufficiency check after each page that yielded content
-                            withContext(Dispatchers.Main) { _searchStatus.value = "Evaluating sufficiency…" }
-                            val gathered = allFindings.joinToString("\n") { "• ${it.second}: ${it.third}" }
-                            val (sufficient, sufScore) = runCatching {
-                                llmService.evaluateSufficiency(gathered, query)
-                            }.getOrElse { Pair(false, 0) }
-                            appendLog("    -> Sufficiency: $sufScore/10 — ${if (sufficient) "SUFFICIENT" else "not yet"}")
-                            if (sufficient) {
-                                overallSufficient = true
-                                break
+                            // Step 5: sufficiency check (only when enabled and min pages threshold met)
+                            if (config.checkSufficiency && pagesReadWithContent >= config.minPagesBeforeCheck) {
+                                withContext(Dispatchers.Main) { _searchStatus.value = "Evaluating sufficiency…" }
+                                val gathered = allFindings.joinToString("\n") { "• ${it.second}: ${it.third}" }
+                                val (sufficient, _) = runCatching {
+                                    llmService.evaluateSufficiency(gathered, query)
+                                }.getOrElse { Pair(false, 0) }
+                                appendLog("    -> Sufficiency: ${if (sufficient) "SUFFICIENT" else "not yet"}")
+                                if (sufficient) {
+                                    overallSufficient = true
+                                    break
+                                }
                             }
                         }
 
                         if (overallSufficient) break
 
-                        // ── Step 3b: Gap analysis on real extracted content (only if looping) ──
-                        if (iteration < maxIterations && allFindings.isNotEmpty()) {
+                        // ── Step 3b: Gap analysis (only if looping with sufficiency check) ──
+                        if (config.checkSufficiency && iteration < config.maxIterations && allFindings.isNotEmpty()) {
                             withContext(Dispatchers.Main) { _searchStatus.value = "Analyzing gaps…" }
                             appendLog("Step 3b — Gap analysis on extracted content…")
                             val findingsText = allFindings.joinToString("\n") { "• ${it.second}: ${it.third}" }
@@ -385,39 +630,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
-                    // Synthesize all findings
-                    var synthesis: String? = null
-                    if (allFindings.isNotEmpty()) {
-                        withContext(Dispatchers.Main) { _searchStatus.value = "Synthesizing research…" }
-                        appendLog("\nSynthesizing ${allFindings.size} findings…")
-                        synthesis = runCatching {
-                            llmService.synthesizeResearch(query, allFindings)
-                        }.getOrNull()
-                        appendLog(if (synthesis != null) "Done." else "Synthesis failed — using raw findings.")
-                    } else {
-                        appendLog("\nNo findings gathered.")
-                    }
+                    appendLog(if (allFindings.isNotEmpty()) "\n${allFindings.size} findings gathered." else "\nNo findings gathered.")
 
-                    val formatted = buildString {
-                        if (!synthesis.isNullOrBlank()) {
-                            appendLine(synthesis)
-                        } else {
-                            // Synthesis failed — fall back to header + raw notes
-                            appendLine("[Mega Deep Research: \"$query\"]")
-                            appendLine("Queries used: ${queriesUsed.joinToString(" · ")}")
-                            if (allFindings.isNotEmpty()) {
-                                appendLine()
-                                appendLine("Research notes:")
-                                allFindings.groupBy { it.first }.forEach { (q, items) ->
-                                    appendLine("— $q —")
-                                    items.forEach { (_, title, info) -> appendLine("• $title: $info") }
-                                }
-                            }
-                        }
-                    }.trim()
-
+                    // Save the live log as a permanent message in the conversation
                     withContext(Dispatchers.Main) {
-                        // Save the live log as a permanent message in the conversation
                         val finalLog = _searchLog.value
                         if (!finalLog.isNullOrBlank()) {
                             conv.messages.add(Message(
@@ -427,19 +643,66 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             ))
                         }
                         _searchLog.value = null
-
-                        if (allFindings.isNotEmpty() || synthesis != null) {
-                            conv.messages.add(Message(
-                                role = MessageRole.USER,
-                                content = formatted,
-                                isSearchResult = true
-                            ))
-                        }
-                        _currentConversation.value = conv.copy(messages = conv.messages)
                         _isSearching.value = false
                         _searchStatus.value = null
-                        sendMessage(query)
                     }
+
+                    if (allFindings.isEmpty()) {
+                        // Nothing found — fall back to a plain sendMessage
+                        withContext(Dispatchers.Main) {
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            sendMessage(query)
+                        }
+                        return@launch
+                    }
+
+                    // Stream the final answer directly from research notes (no intermediate synthesis call)
+                    val userMsg = Message(role = MessageRole.USER, content = query)
+                    val assistantMessage = Message(
+                        role = MessageRole.ASSISTANT,
+                        content = "",
+                        status = MessageStatus.STREAMING
+                    )
+                    withContext(Dispatchers.Main) {
+                        conv.messages.add(userMsg)
+                        conv.messages.add(assistantMessage)
+                        _streamingText.value = ""
+                        _isGenerating.value = true
+                        _currentConversation.value = conv.copy(messages = conv.messages)
+                    }
+
+                    llmService.answerFromResearch(
+                        question = query,
+                        findings = allFindings,
+                        onPartial = { partial ->
+                            viewModelScope.launch(Dispatchers.Main) {
+                                if (_isGenerating.value) {
+                                    _streamingText.value = partial
+                                }
+                            }
+                        },
+                        onDone = {
+                            viewModelScope.launch(Dispatchers.Main) {
+                                val finalText = _streamingText.value
+                                _streamingText.value = ""
+                                _isGenerating.value = false
+                                assistantMessage.content = finalText.ifBlank { "*(no response — tap ↺ to retry)*" }
+                                assistantMessage.status = if (finalText.isBlank()) MessageStatus.ERROR else MessageStatus.DONE
+                                _currentConversation.value = conv.copy(messages = conv.messages)
+                                persistCurrentConversation()
+                            }
+                        },
+                        onError = { error ->
+                            viewModelScope.launch(Dispatchers.Main) {
+                                assistantMessage.content = _streamingText.value.ifEmpty { "Error: $error" }
+                                assistantMessage.status = MessageStatus.ERROR
+                                _streamingText.value = ""
+                                _isGenerating.value = false
+                                _errorMessage.value = error
+                                _currentConversation.value = conv.copy(messages = conv.messages)
+                            }
+                        }
+                    )
                     return@launch
                 }
 

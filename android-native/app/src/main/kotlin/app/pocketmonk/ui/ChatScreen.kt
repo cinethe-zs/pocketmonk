@@ -118,7 +118,7 @@ fun ChatScreen(
     var inputText by rememberSaveable { mutableStateOf("") }
     var showSystemPromptBar by remember { mutableStateOf(false) }
     var showNewConversationDialog by remember { mutableStateOf(false) }
-    // 0 = off, 1 = Quick, 2 = Normal, 3 = Deep
+    // 0 = off, 1 = Normal, 2 = Deep, 3 = Super Deep, 4 = 5-Forced, 5 = 10-Forced, 6 = eBay
     var searchLevel by rememberSaveable { mutableStateOf(0) }
 
     val speechLauncher = rememberLauncherForActivityResult(
@@ -487,9 +487,11 @@ fun ChatScreen(
                             } else {
                                 val (levelLabel, levelDesc) = when (searchLevel) {
                                     1 -> "Normal" to "6 results · reads top 4 pages"
-                                    2 -> "Deep" to "8 results · 6 pages · LLM-compressed"
-                                    3 -> "Super Deep" to "12 results · 8 pages · LLM-compressed"
-                                    else -> "Mega Deep" to "model plans queries · targeted extraction · synthesis"
+                                    2 -> "Deep" to "model plans queries · sufficiency check"
+                                    3 -> "Super Deep" to "reads 5 pages before sufficiency check"
+                                    4 -> "5-Forced" to "reads top 5 pages · no sufficiency check"
+                                    5 -> "10-Forced" to "reads top 10 pages · no sufficiency check"
+                                    else -> "Camera search" to "eBay sold · active · best offer · LLM filter"
                                 }
                                 Text(
                                     "$levelLabel search · $levelDesc · Send to run",
@@ -539,7 +541,7 @@ fun ChatScreen(
                         Spacer(Modifier.width(4.dp))
                         // Search level button — cycles 0→1→2→3→0
                         IconButton(
-                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 5 },
+                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 7 },
                             enabled = modelReady && !isGenerating && !isCompressing && !isSearching,
                             modifier = Modifier.size(44.dp)
                         ) {
@@ -658,7 +660,7 @@ private fun LiveSearchLogCard(log: String, modifier: Modifier = Modifier) {
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                "Mega Deep — live research log",
+                "Deep search — live research log",
                 color = Color(0xFF58A6FF),
                 style = MaterialTheme.typography.labelSmall
             )

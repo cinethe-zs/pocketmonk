@@ -101,7 +101,7 @@ class LlmService(private val context: Context) {
                     accumulated.append(partial)
                     // Reset watchdog on each received token
                     mainHandler.removeCallbacks(watchdog)
-                    val snapshot = accumulated.toString()
+                    val snapshot = accumulated.toString().cleaned()
                     mainHandler.post { onPartial(snapshot) }
                 }
                 if (done) {
@@ -142,7 +142,7 @@ class LlmService(private val context: Context) {
             append("<start_of_turn>model\n")
         }
         return@withContext try {
-            engine.generateResponse(prompt)?.trim()
+            engine.generateResponse(prompt)?.trim()?.cleaned()
         } catch (e: Exception) {
             null
         }
@@ -193,7 +193,7 @@ class LlmService(private val context: Context) {
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
         try {
-            val result = engine.generateResponse(prompt)?.trim()
+            val result = engine.generateResponse(prompt)?.trim()?.cleaned()
             if (result.isNullOrBlank() || result.equals("SKIP", ignoreCase = true)) null else result
         } catch (e: Exception) {
             null
@@ -286,57 +286,34 @@ class LlmService(private val context: Context) {
     }
 
     /**
-     * Generates 3 diverse candidate search queries with explicit search syntax guidance.
-     * If [gapContext] is provided, targets the missing information.
+     * Generates a single optimized web search query for [question].
+     * If [gapContext] is provided, targets the missing information from previous iterations.
+     * Returns the query string, or null on failure.
      */
-    suspend fun generateQueryCandidates(question: String, gapContext: String? = null): List<String> =
+    suspend fun generateOptimizedQuery(question: String, gapContext: String? = null): String? =
         withContext(Dispatchers.IO) {
-            val engine = llm ?: return@withContext emptyList()
+            val engine = llm ?: return@withContext null
             val prompt = buildString {
                 append("<start_of_turn>user\n")
                 if (gapContext.isNullOrBlank()) {
-                    append("Generate 3 diverse, targeted web search queries to find information answering:\n$question\n\n")
+                    append("Rewrite this as a short Google search query (5-8 words max):\n$question\n")
                 } else {
-                    append("Question: $question\n\nPrevious searches missed: $gapContext\n\n")
-                    append("Generate 3 web search queries targeting the missing information.\n\n")
+                    append("Question: $question\nPrevious searches missed: $gapContext\n")
+                    append("Write a short Google search query (5-8 words) targeting the missing information.\n")
                 }
-                append("Output ONLY the 3 queries, one per line, no numbering, no explanation.")
+                append("Reply with only the search query, no explanation, no quotes.")
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
             try {
-                val raw = engine.generateResponse(prompt)?.trim() ?: return@withContext emptyList()
-                raw.lines()
-                    .map { it.trim().trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == '-' || c == '*' || c == '•' || c == ' ' }.trim() }
-                    .filter { it.length > 4 }
-                    .take(5)
-            } catch (e: Exception) { emptyList() }
-        }
-
-    /**
-     * Picks the best query from [candidates] for answering [question].
-     * Returns the selected query string.
-     */
-    suspend fun pickBestQuery(candidates: List<String>, question: String): String? =
-        withContext(Dispatchers.IO) {
-            if (candidates.isEmpty()) return@withContext null
-            if (candidates.size == 1) return@withContext candidates.first()
-            val engine = llm ?: return@withContext candidates.first()
-            val prompt = buildString {
-                append("<start_of_turn>user\n")
-                append("Which of these search queries would most effectively find information to answer: \"$question\"?\n\n")
-                candidates.forEachIndexed { i, q -> append("${i + 1}. $q\n") }
-                append("\nReply with only the chosen query, nothing else.")
-                append("<end_of_turn>\n<start_of_turn>model\n")
-            }
-            try {
-                val picked = engine.generateResponse(prompt)?.trim()
+                engine.generateResponse(prompt)?.trim()
                     ?.lines()?.firstOrNull { it.isNotBlank() }
-                    ?.trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == '-' || c == ' ' }?.trim()
-                // If model returned a number, map it to the candidate
-                val num = picked?.let { Regex("^(\\d+)").find(it) }?.groupValues?.get(1)?.toIntOrNull()
-                if (num != null && num in 1..candidates.size) candidates[num - 1]
-                else picked?.ifBlank { null } ?: candidates.first()
-            } catch (e: Exception) { candidates.first() }
+                    ?.trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == '-' || c == '*' || c == '•' || c == ' ' }
+                    ?.trim()
+                    ?.removeSurrounding("\"")
+                    ?.removeSurrounding("'")
+                    ?.trim()
+                    ?.ifBlank { null }
+            } catch (e: Exception) { null }
         }
 
     /**
@@ -387,31 +364,105 @@ class LlmService(private val context: Context) {
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
         try {
-            engine.generateResponse(prompt)?.trim()?.ifBlank { null }
+            engine.generateResponse(prompt)?.trim()?.cleaned()?.ifBlank { null }
         } catch (e: Exception) { null }
     }
 
     /**
-     * Rates 0-10 how completely [gatheredInfo] answers [question].
-     * Returns (sufficient, score) where sufficient = score >= 7.
+     * Checks whether [gatheredInfo] is sufficient to fully answer [question].
+     * Uses a strict YES/NO prompt to avoid numerical bias on small models.
+     * Returns (sufficient, displayScore) where displayScore is 10 for YES, 0 for NO.
      */
     suspend fun evaluateSufficiency(gatheredInfo: String, question: String): Pair<Boolean, Int> =
         withContext(Dispatchers.IO) {
             val engine = llm ?: return@withContext Pair(false, 0)
             val prompt = buildString {
                 append("<start_of_turn>user\n")
-                append("Rate 0-10 how completely the following information answers: \"$question\"\n")
-                append("10 = fully answers, 0 = doesn't answer at all.\n\n")
+                append("Question: \"$question\"\n\n")
+                append("Information gathered:\n")
                 append(gatheredInfo.take(4000))
-                append("\n\nReply with only the number (0-10).")
+                append("\n\nDoes the information above contain enough specific facts to fully answer the question?\n")
+                append("Be strict: reply YES only if the information directly covers all main aspects of the question.\n")
+                append("Reply with only YES or NO.")
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
             try {
-                val raw = engine.generateResponse(prompt)?.trim() ?: return@withContext Pair(false, 0)
-                val score = Regex("\\d+").find(raw)?.value?.toIntOrNull()?.coerceIn(0, 10) ?: 0
-                Pair(score >= 7, score)
+                val raw = engine.generateResponse(prompt)?.trim()?.uppercase() ?: return@withContext Pair(false, 0)
+                val sufficient = raw.startsWith("YES")
+                Pair(sufficient, if (sufficient) 10 else 0)
             } catch (e: Exception) { Pair(false, 0) }
         }
+
+    /**
+     * Streams the final answer to [question] directly from [findings], using the same
+     * synthesis-style prompt. Bypasses the normal chat history — output goes straight
+     * to the provided streaming callbacks (same contract as [chat]).
+     */
+    fun answerFromResearch(
+        question: String,
+        findings: List<Triple<String, String, String>>,
+        onPartial: (String) -> Unit,
+        onDone: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val engine = llm
+        if (engine == null || !isReady) { onError("Model not initialized"); return }
+        if (isInferring) { onError("Already inferring"); return }
+        isInferring = true
+
+        val prompt = buildString {
+            append("<start_of_turn>user\n")
+            findings.groupBy { it.first }.entries.forEach { (q, items) ->
+                append("[Web search results for \"$q\":]\n")
+                items.forEach { (_, title, info) -> append("  • $title: $info\n") }
+                append("\n")
+            }
+            append("Based on the previous research notes, provide a comprehensive, well-organized answer to this: \"$question\"\n")
+            append("<end_of_turn>\n<start_of_turn>model\n")
+        }
+
+        try {
+            val sessionOptions = LlmInferenceSession.LlmInferenceSessionOptions.builder()
+                .setTopK(40)
+                .setTemperature(1.0f)
+                .build()
+            val session = LlmInferenceSession.createFromOptions(engine, sessionOptions)
+            currentSession = session
+            session.addQueryChunk(prompt)
+
+            val watchdog = Runnable {
+                if (isInferring) {
+                    cancel()
+                    mainHandler.post { onError("Generation timed out — context may be too long. Tap ↺ to retry.") }
+                }
+            }
+            mainHandler.postDelayed(watchdog, 45_000)
+
+            val accumulated = StringBuilder()
+            session.generateResponseAsync { partial, done ->
+                if (!isInferring) return@generateResponseAsync
+                if (!partial.isNullOrEmpty()) {
+                    accumulated.append(partial)
+                    mainHandler.removeCallbacks(watchdog)
+                    val snapshot = accumulated.toString().cleaned()
+                    mainHandler.post { onPartial(snapshot) }
+                }
+                if (done) {
+                    mainHandler.removeCallbacks(watchdog)
+                    mainHandler.post {
+                        isInferring = false
+                        currentSession = null
+                        try { session.close() } catch (_: Exception) {}
+                        onDone()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            isInferring = false
+            currentSession = null
+            onError(e.message ?: "Unknown error during inference")
+        }
+    }
 
     fun cancel() {
         val session = currentSession
@@ -427,6 +478,79 @@ class LlmService(private val context: Context) {
         try { llm?.close() } catch (_: Exception) {}
         llm = null
     }
+
+    /**
+     * Extracts structured camera specifications from [pageContent] for [cameraName].
+     * Targets 30 specific fields; returns a formatted list, or null if not applicable.
+     */
+    suspend fun extractCameraSpecs(pageContent: String, cameraName: String): String? =
+        withContext(Dispatchers.IO) {
+            val engine = llm ?: return@withContext null
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Extract camera specifications for the $cameraName from the content below.\n")
+                append("For each field, write \"Field: value\" on its own line. If the value is not found, skip that field entirely.\n\n")
+                append("Fields to extract:\n")
+                append("Max resolution, Image ratio w:h, Effective pixels, Sensor type, ISO, Image stabilization, Uncompressed format, ")
+                append("Focal length (equiv.), Optical zoom, Maximum aperture, Normal focus range, Macro focus range, ")
+                append("Screen size, Screen dots, Touch screen, Viewfinder type, ")
+                append("Minimum shutter speed, Maximum shutter speed, Aperture priority, Shutter priority, ")
+                append("Built-in flash, External flash, Flash modes, Self-timer, ")
+                append("Storage types, Environmentally sealed, Battery, Weight (inc. batteries), Dimensions, Color settings\n\n")
+                append("Content:\n${pageContent.take(9000)}\n\n")
+                append("Reply with only the found fields in \"Field: value\" format, one per line. No intro, no explanation.")
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            try {
+                val result = engine.generateResponse(prompt)?.trim()?.cleaned()
+                if (result.isNullOrBlank() || result.equals("SKIP", ignoreCase = true)) null else result
+            } catch (e: Exception) { null }
+        }
+
+    /**
+     * Filters a list of eBay listing titles by relevance to [query].
+     * Processes in batches of 15. Returns the set of matching 0-based indices.
+     * Falls back to all indices on model failure.
+     */
+    suspend fun filterEbayListings(titles: List<String>, query: String): Set<Int> =
+        withContext(Dispatchers.IO) {
+            if (titles.isEmpty()) return@withContext emptySet()
+            val engine = llm ?: return@withContext titles.indices.toSet()
+            val matchingIndices = mutableSetOf<Int>()
+            val batchSize = 15
+            titles.chunked(batchSize).forEachIndexed { batchIdx, batch ->
+                val offset = batchIdx * batchSize
+                val prompt = buildString {
+                    append("<start_of_turn>user\n")
+                    append("The user is looking for: \"$query\"\n\n")
+                    append("Which of these eBay listings are actually a \"$query\"?\n")
+                    append("Exclude accessories, cases, chargers, replacement parts, or unrelated items.\n\n")
+                    batch.forEachIndexed { i, t -> append("${i + 1}. $t\n") }
+                    append("\nReply with only the numbers of matching listings, comma-separated.")
+                    append("<end_of_turn>\n<start_of_turn>model\n")
+                }
+                try {
+                    val raw = engine.generateResponse(prompt)?.trim() ?: return@forEachIndexed
+                    val matched = Regex("\\d+").findAll(raw)
+                        .map { it.value.toInt() - 1 }
+                        .filter { it in batch.indices }
+                        .map { it + offset }
+                        .toSet()
+                    // If model returned nothing meaningful, accept all in this batch
+                    if (matched.isEmpty()) {
+                        matchingIndices.addAll(batch.indices.map { it + offset })
+                    } else {
+                        matchingIndices.addAll(matched)
+                    }
+                } catch (e: Exception) {
+                    matchingIndices.addAll(batch.indices.map { it + offset })
+                }
+            }
+            matchingIndices
+        }
+
+    /** Replaces literal \n and \t sequences with actual newlines/tabs from model output. */
+    private fun String.cleaned() = replace("\\n", "\n").replace("\\t", "\t")
 
     private fun formatPrompt(
         messages: List<Message>,

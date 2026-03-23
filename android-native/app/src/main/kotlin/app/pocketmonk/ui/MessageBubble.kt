@@ -508,7 +508,7 @@ private fun SearchLogCard(message: Message, modifier: Modifier = Modifier) {
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                "Mega Deep — research log",
+                "Deep search — research log",
                 color = Color(0xFF58A6FF),
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Medium,
