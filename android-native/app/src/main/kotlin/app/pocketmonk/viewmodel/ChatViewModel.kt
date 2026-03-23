@@ -249,8 +249,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     var accumulatedGapContext: String? = null
                     val allFindings = mutableListOf<Triple<String, String, String>>()
                     val queriesUsed = mutableListOf<String>()
+                    var overallSufficient = false
 
-                    // Live log — emits to a dedicated StateFlow so Compose always re-renders
+                    // Live log — dedicated StateFlow guarantees recomposition on every append
                     withContext(Dispatchers.Main) { _searchLog.value = "=== Mega Deep Research ===" }
 
                     suspend fun appendLog(line: String) {
@@ -260,22 +261,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     for (iteration in 1..maxIterations) {
+                        if (overallSufficient) break
                         appendLog("\n[Iteration $iteration / $maxIterations]")
 
-                        // Step 1: Generate optimized query
+                        // ── Step 1: Generate 3 candidate queries and pick the best ──────
                         withContext(Dispatchers.Main) {
                             _searchStatus.value = if (iteration == 1) "Forging search query…"
                                                   else "Iteration $iteration: refining search query…"
                         }
-                        appendLog("Step 1 — Forging search query…")
+                        appendLog("Step 1 — Generating candidate queries…")
+                        val candidates = runCatching {
+                            llmService.generateQueryCandidates(query, accumulatedGapContext)
+                        }.getOrElse { emptyList() }
+                        if (candidates.isEmpty()) { appendLog("  Failed to generate queries — stopping."); break }
+                        candidates.forEach { appendLog("  > $it") }
+                        appendLog("  Picking best…")
                         val optimizedQuery = runCatching {
-                            llmService.generateOptimizedQuery(query, accumulatedGapContext)
-                        }.getOrNull()
-                        if (optimizedQuery == null) { appendLog("  Failed to generate query — stopping."); break }
+                            llmService.pickBestQuery(candidates, query)
+                        }.getOrNull() ?: candidates.first()
                         queriesUsed.add(optimizedQuery)
-                        appendLog("  Query: \"$optimizedQuery\"")
+                        appendLog("  Selected: \"$optimizedQuery\"")
 
-                        // Step 2: Fetch 10 results (metadata only — no page reads yet)
+                        // ── Step 2: Fetch 10 results (metadata only) ────────────────────
                         withContext(Dispatchers.Main) { _searchStatus.value = "Searching: \"$optimizedQuery\"…" }
                         appendLog("Step 2 — Searching DuckDuckGo…")
                         val results = runCatching {
@@ -283,43 +290,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }.getOrNull()
                         if (results == null) { appendLog("  Search failed — stopping."); break }
                         if (results.isEmpty()) { appendLog("  No results found — stopping."); break }
-                        appendLog("  ${results.size} results found:")
-                        results.forEachIndexed { i, r -> appendLog("    ${i + 1}. ${r.title.take(80)}") }
+                        appendLog("  ${results.size} results found")
 
                         val resultsSummary = results.mapIndexed { i, r ->
                             "${i + 1}. ${r.title}\n   ${r.snippet}"
                         }.joinToString("\n")
 
-                        // Step 3a: Score results by relevance (title+snippet only)
+                        // ── Step 3a: Score all 10 results ───────────────────────────────
                         withContext(Dispatchers.Main) { _searchStatus.value = "Scoring ${results.size} results…" }
-                        appendLog("Step 3a — Scoring relevance…")
-                        val rankedIndices = runCatching {
+                        appendLog("Step 3a — Scoring relevance (title + snippet)…")
+                        val scoredResults = runCatching {
                             llmService.scoreResults(resultsSummary, query)
-                        }.getOrElse { results.indices.toList() }
-                        val top3Labels = rankedIndices.take(3)
-                            .mapNotNull { results.getOrNull(it)?.title?.take(60) }
-                            .joinToString(" > ")
-                        appendLog("  Top 3: $top3Labels")
+                        }.getOrElse { results.indices.map { Pair(it, 5) } }
 
-                        // Step 3b: Analyze what's missing (accumulated across iterations)
-                        withContext(Dispatchers.Main) { _searchStatus.value = "Analyzing what's missing…" }
-                        appendLog("Step 3b — Gap analysis…")
-                        val gapAnalysis = runCatching {
-                            llmService.analyzeGaps(resultsSummary, query, accumulatedGapContext)
-                        }.getOrNull()
-                        if (!gapAnalysis.isNullOrBlank()) {
-                            appendLog("  Gap: ${gapAnalysis.take(200)}${if (gapAnalysis.length > 200) "…" else ""}")
-                            accumulatedGapContext = buildString {
-                                if (!accumulatedGapContext.isNullOrBlank()) appendLine(accumulatedGapContext)
-                                appendLine(gapAnalysis)
-                            }.trim()
-                        } else {
-                            appendLog("  No gap identified.")
+                        // Fill in any missing results at score 0 so all 10 are covered
+                        val allScored = run {
+                            val seen = scoredResults.map { it.first }.toSet()
+                            val missing = results.indices.filter { it !in seen }.map { Pair(it, 0) }
+                            (scoredResults + missing)
+                        }
+                        allScored.forEachIndexed { rank, (idx, score) ->
+                            val title = results.getOrNull(idx)?.title?.take(70) ?: "?"
+                            appendLog("  #${rank + 1} [$score/10] $title")
                         }
 
-                        // Step 4: Read top 3 ranked pages in full and extract
-                        appendLog("Step 4 — Reading top 3 pages…")
-                        for (idx in rankedIndices.take(3)) {
+                        // ── Step 4+5: Read pages one by one (all 10), check sufficiency after each ──
+                        appendLog("Step 4+5 — Reading pages & checking sufficiency…")
+                        for ((idx, relevanceScore) in allScored) {
+                            if (overallSufficient) break
                             val result = results.getOrNull(idx) ?: continue
                             val url = result.realUrl
                             if (url == null) {
@@ -328,7 +326,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             }
                             val displayHost = result.displayUrl.ifBlank { result.title }.take(50)
                             withContext(Dispatchers.Main) { _searchStatus.value = "Reading $displayHost…" }
-                            appendLog("  Reading: $displayHost")
+                            appendLog("  Reading [$relevanceScore/10]: $displayHost")
                             val fullContent = runCatching {
                                 webSearchService.fetchFullPage(url)
                             }.getOrElse { "" }
@@ -345,28 +343,45 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 allFindings.add(Triple(optimizedQuery, result.title, extracted))
                                 val bulletCount = extracted.lines()
                                     .count { it.trimStart().startsWith("-") || it.trimStart().startsWith("•") }
-                                appendLog("    -> ${if (bulletCount > 0) "$bulletCount facts extracted" else "Relevant content extracted"}")
+                                appendLog("    -> ${if (bulletCount > 0) "$bulletCount facts extracted" else "Content extracted"}")
                             } else {
                                 appendLog("    -> Nothing relevant found")
+                                continue
+                            }
+
+                            // Step 5: sufficiency check after each page that yielded content
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Evaluating sufficiency…" }
+                            val gathered = allFindings.joinToString("\n") { "• ${it.second}: ${it.third}" }
+                            val (sufficient, sufScore) = runCatching {
+                                llmService.evaluateSufficiency(gathered, query)
+                            }.getOrElse { Pair(false, 0) }
+                            appendLog("    -> Sufficiency: $sufScore/10 — ${if (sufficient) "SUFFICIENT" else "not yet"}")
+                            if (sufficient) {
+                                overallSufficient = true
+                                break
                             }
                         }
 
-                        // Step 5: Evaluate sufficiency
-                        appendLog("Step 5 — Evaluating sufficiency…")
-                        if (allFindings.isNotEmpty()) {
-                            withContext(Dispatchers.Main) { _searchStatus.value = "Evaluating sufficiency…" }
-                            val gathered = allFindings.joinToString("\n") { "• ${it.second}: ${it.third}" }
-                            val sufficient = runCatching {
-                                llmService.evaluateSufficiency(gathered, query)
-                            }.getOrElse { false }
-                            if (sufficient) {
-                                appendLog("  SUFFICIENT — stopping early")
-                                break
+                        if (overallSufficient) break
+
+                        // ── Step 3b: Gap analysis on real extracted content (only if looping) ──
+                        if (iteration < maxIterations && allFindings.isNotEmpty()) {
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Analyzing gaps…" }
+                            appendLog("Step 3b — Gap analysis on extracted content…")
+                            val findingsText = allFindings.joinToString("\n") { "• ${it.second}: ${it.third}" }
+                            val gapAnalysis = runCatching {
+                                llmService.analyzeGaps(findingsText, query, accumulatedGapContext)
+                            }.getOrNull()
+                            if (!gapAnalysis.isNullOrBlank()) {
+                                appendLog("  Gap: ${gapAnalysis.take(200)}${if (gapAnalysis.length > 200) "…" else ""}")
+                                accumulatedGapContext = buildString {
+                                    if (!accumulatedGapContext.isNullOrBlank()) appendLine(accumulatedGapContext)
+                                    appendLine(gapAnalysis)
+                                }.trim()
                             } else {
-                                appendLog("  NOT YET — ${if (iteration < maxIterations) "continuing to iteration ${iteration + 1}" else "max iterations reached"}")
+                                appendLog("  No gap identified — stopping.")
+                                break
                             }
-                        } else {
-                            appendLog("  No findings yet — continuing")
                         }
                     }
 

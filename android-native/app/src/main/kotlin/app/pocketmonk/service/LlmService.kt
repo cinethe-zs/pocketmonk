@@ -286,63 +286,97 @@ class LlmService(private val context: Context) {
     }
 
     /**
-     * Interprets [question] and generates a single optimized web search query.
-     * If [gapContext] is provided (from a previous iteration), targets the missing information.
+     * Generates 3 diverse candidate search queries with explicit search syntax guidance.
+     * If [gapContext] is provided, targets the missing information.
      */
-    suspend fun generateOptimizedQuery(question: String, gapContext: String? = null): String? =
-        withContext(Dispatchers.IO) {
-            val engine = llm ?: return@withContext null
-            val prompt = buildString {
-                append("<start_of_turn>user\n")
-                if (gapContext.isNullOrBlank()) {
-                    append("Generate a single, highly targeted web search query that maximizes the chance of finding information to answer this question:\n\n")
-                    append(question)
-                } else {
-                    append("Question: $question\n\n")
-                    append("Previous searches did not fully answer it. What was missing:\n$gapContext\n\n")
-                    append("Generate a single, targeted web search query to find the missing information.")
-                }
-                append("\n\nReply with only the search query, nothing else.")
-                append("<end_of_turn>\n<start_of_turn>model\n")
-            }
-            try {
-                engine.generateResponse(prompt)?.trim()
-                    ?.lines()?.firstOrNull { it.isNotBlank() }
-                    ?.trimStart('-', '*', '•', '·')?.trim()
-                    ?.ifBlank { null }
-            } catch (e: Exception) { null }
-        }
-
-    /**
-     * Scores [resultsSummary] (numbered list of title+snippet) by relevance to [question].
-     * Returns 0-based indices in ranked order.
-     */
-    suspend fun scoreResults(resultsSummary: String, question: String): List<Int> =
+    suspend fun generateQueryCandidates(question: String, gapContext: String? = null): List<String> =
         withContext(Dispatchers.IO) {
             val engine = llm ?: return@withContext emptyList()
             val prompt = buildString {
                 append("<start_of_turn>user\n")
-                append("Rank these search results by relevance to: \"$question\"\n\n")
-                append(resultsSummary)
-                append("\n\nReply with only the result numbers in order of relevance, most relevant first, comma-separated. Example: 3,1,7,2")
+                append("You are crafting web search queries. Use these operators when helpful:\n")
+                append("- Quotes for exact phrases: \"machine learning tutorial\"\n")
+                append("- Minus to exclude terms: python -snake\n")
+                append("- site: to search a specific site: site:reddit.com\n")
+                append("- OR for alternatives: cats OR dogs\n")
+                append("- filetype: for specific file types: filetype:pdf\n\n")
+                if (gapContext.isNullOrBlank()) {
+                    append("Generate 3 diverse, targeted web search queries to find information answering:\n$question\n\n")
+                } else {
+                    append("Question: $question\n\nPrevious searches missed: $gapContext\n\n")
+                    append("Generate 3 web search queries targeting the missing information.\n\n")
+                }
+                append("Output ONLY the 3 queries, one per line, no numbering, no explanation.")
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
             try {
                 val raw = engine.generateResponse(prompt)?.trim() ?: return@withContext emptyList()
-                Regex("\\d+").findAll(raw)
-                    .map { it.value.toInt() - 1 }  // 1-based → 0-based
-                    .filter { it >= 0 }
-                    .distinct()
+                raw.lines()
+                    .map { it.trim().trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == '-' || c == '*' || c == '•' || c == ' ' }.trim() }
+                    .filter { it.length > 4 }
+                    .take(5)
+            } catch (e: Exception) { emptyList() }
+        }
+
+    /**
+     * Picks the best query from [candidates] for answering [question].
+     * Returns the selected query string.
+     */
+    suspend fun pickBestQuery(candidates: List<String>, question: String): String? =
+        withContext(Dispatchers.IO) {
+            if (candidates.isEmpty()) return@withContext null
+            if (candidates.size == 1) return@withContext candidates.first()
+            val engine = llm ?: return@withContext candidates.first()
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Which of these search queries would most effectively find information to answer: \"$question\"?\n\n")
+                candidates.forEachIndexed { i, q -> append("${i + 1}. $q\n") }
+                append("\nReply with only the chosen query, nothing else.")
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            try {
+                val picked = engine.generateResponse(prompt)?.trim()
+                    ?.lines()?.firstOrNull { it.isNotBlank() }
+                    ?.trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == '-' || c == ' ' }?.trim()
+                // If model returned a number, map it to the candidate
+                val num = picked?.let { Regex("^(\\d+)").find(it) }?.groupValues?.get(1)?.toIntOrNull()
+                if (num != null && num in 1..candidates.size) candidates[num - 1]
+                else picked?.ifBlank { null } ?: candidates.first()
+            } catch (e: Exception) { candidates.first() }
+        }
+
+    /**
+     * Scores each result in [resultsSummary] (numbered list of title+snippet) 0-10 for relevance.
+     * Returns list of (0-based index, score) pairs sorted by score descending.
+     */
+    suspend fun scoreResults(resultsSummary: String, question: String): List<Pair<Int, Int>> =
+        withContext(Dispatchers.IO) {
+            val engine = llm ?: return@withContext emptyList()
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Score each search result 0-10 for relevance to: \"$question\"\n")
+                append("10 = highly relevant, 0 = not relevant.\n\n")
+                append(resultsSummary)
+                append("\n\nReply in this exact format, one per line:\n1: 8\n2: 3\n...")
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            try {
+                val raw = engine.generateResponse(prompt)?.trim() ?: return@withContext emptyList()
+                Regex("(\\d+):\\s*(\\d+)").findAll(raw)
+                    .map { Pair(it.groupValues[1].toInt() - 1, it.groupValues[2].toInt().coerceIn(0, 10)) }
+                    .filter { it.first >= 0 }
+                    .distinctBy { it.first }
+                    .sortedByDescending { it.second }
                     .toList()
             } catch (e: Exception) { emptyList() }
         }
 
     /**
-     * Analyzes what information is still missing from [resultsSummary] to answer [question].
+     * Analyzes what information is still missing based on [extractedFindings] (real extracted content).
      * Carries over [previousGapContext] from prior iterations.
      */
     suspend fun analyzeGaps(
-        resultsSummary: String,
+        extractedFindings: String,
         question: String,
         previousGapContext: String? = null
     ): String? = withContext(Dispatchers.IO) {
@@ -353,9 +387,9 @@ class LlmService(private val context: Context) {
             if (!previousGapContext.isNullOrBlank()) {
                 append("Previously identified gaps:\n$previousGapContext\n\n")
             }
-            append("Based on these search result summaries, what specific information is still missing to fully answer the question?\n\n")
-            append(resultsSummary)
-            append("\n\nReply with 2-4 sentences describing what is missing.")
+            append("Based on the following extracted information, what is still missing to fully answer the question?\n\n")
+            append(extractedFindings.take(4000))
+            append("\n\nReply with 2-4 sentences describing what specific information is still missing.")
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
         try {
@@ -364,21 +398,25 @@ class LlmService(private val context: Context) {
     }
 
     /**
-     * Returns true if [gatheredInfo] is sufficient to answer [question].
+     * Rates 0-10 how completely [gatheredInfo] answers [question].
+     * Returns (sufficient, score) where sufficient = score >= 7.
      */
-    suspend fun evaluateSufficiency(gatheredInfo: String, question: String): Boolean =
+    suspend fun evaluateSufficiency(gatheredInfo: String, question: String): Pair<Boolean, Int> =
         withContext(Dispatchers.IO) {
-            val engine = llm ?: return@withContext false
+            val engine = llm ?: return@withContext Pair(false, 0)
             val prompt = buildString {
                 append("<start_of_turn>user\n")
-                append("Question: \"$question\"\n\n")
-                append("Gathered information:\n${gatheredInfo.take(4000)}\n\n")
-                append("Does this information sufficiently answer the question? Reply with only YES or NO.")
+                append("Rate 0-10 how completely the following information answers: \"$question\"\n")
+                append("10 = fully answers, 0 = doesn't answer at all.\n\n")
+                append(gatheredInfo.take(4000))
+                append("\n\nReply with only the number (0-10).")
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
             try {
-                engine.generateResponse(prompt)?.trim()?.startsWith("YES", ignoreCase = true) ?: false
-            } catch (e: Exception) { false }
+                val raw = engine.generateResponse(prompt)?.trim() ?: return@withContext Pair(false, 0)
+                val score = Regex("\\d+").find(raw)?.value?.toIntOrNull()?.coerceIn(0, 10) ?: 0
+                Pair(score >= 7, score)
+            } catch (e: Exception) { Pair(false, 0) }
         }
 
     fun cancel() {
