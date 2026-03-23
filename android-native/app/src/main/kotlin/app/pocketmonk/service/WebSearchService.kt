@@ -20,7 +20,7 @@ class WebSearchService {
     private data class LevelConfig(val maxResults: Int, val pagesToFetch: Int)
 
     private val levels = mapOf(
-        0 to LevelConfig(maxResults = 4, pagesToFetch = 3),   // Sub-query  – internal use by Mega Deep
+        0 to LevelConfig(maxResults = 10, pagesToFetch = 5),  // Sub-query  – internal use by Mega Deep
         1 to LevelConfig(maxResults = 6, pagesToFetch = 2),   // Normal     – top 2 pages
         2 to LevelConfig(maxResults = 8, pagesToFetch = 3),   // Deep       – 3 pages, LLM-compressed
         3 to LevelConfig(maxResults = 10, pagesToFetch = 5),  // Super Deep – 5 pages, LLM-compressed
