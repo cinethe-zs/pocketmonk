@@ -12,8 +12,8 @@ android {
         applicationId = "app.pocketmonk"
         minSdk = 28
         targetSdk = 36
-        versionCode = 44
-        versionName = "3.8.2"
+        versionCode = 45
+        versionName = "3.8.3"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -62,8 +62,7 @@ android {
 }
 
 dependencies {
-    implementation(libs.mediapipe.tasks.genai)
-    implementation(libs.mediapipe.tasks.core)
+    implementation(libs.litertlm)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
