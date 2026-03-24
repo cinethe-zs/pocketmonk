@@ -111,7 +111,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _modelReady.value = false
             _errorMessage.value = null
             try {
-                llmService.initialize(modelPath, maxTokens = contextSize)
+                val supportsVision = modelManager.catalog.any {
+                    it.filename == java.io.File(modelPath).name && it.supportsVision
+                }
+                llmService.initialize(modelPath, maxTokens = contextSize, supportsVision = supportsVision)
                 _modelReady.value = true
                 // Ensure there's an active conversation to show in ChatScreen
                 if (_currentConversation.value == null) {

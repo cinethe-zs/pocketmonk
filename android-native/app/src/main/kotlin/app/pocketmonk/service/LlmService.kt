@@ -9,6 +9,7 @@ import app.pocketmonk.model.MessageRole
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import com.google.mediapipe.tasks.genai.llminference.VisionModelOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -26,6 +27,7 @@ class LlmService(private val context: Context) {
     suspend fun initialize(
         modelPath: String,
         maxTokens: Int = 2048,
+        supportsVision: Boolean = false,
     ) = withContext(Dispatchers.IO) {
         dispose()
 
@@ -38,14 +40,19 @@ class LlmService(private val context: Context) {
             .commit()
 
         try {
-            val options = LlmInference.LlmInferenceOptions.builder()
+            val optionsBuilder = LlmInference.LlmInferenceOptions.builder()
                 .setModelPath(modelPath)
                 .setMaxTokens(maxTokens)
                 .setMaxTopK(40)
                 // Force CPU backend — v0.10.13-0.10.14 had a known GPU memory allocation
                 // bug (SIGABRT in LlmGpuCalculator). CPU is stable on all devices.
                 .setPreferredBackend(LlmInference.Backend.CPU)
-                .build()
+            if (supportsVision) {
+                optionsBuilder
+                    .setMaxNumImages(1)
+                    .setVisionModelOptions(VisionModelOptions.builder().build())
+            }
+            val options = optionsBuilder.build()
             llm = LlmInference.createFromOptions(context, options)
             isReady = true
         } finally {
