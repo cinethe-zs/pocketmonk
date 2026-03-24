@@ -79,6 +79,16 @@ class ModelManager(private val context: Context) {
             hfFilename = "gemma-3n-E4B-it-int4.task",
             supportsVision = true,
         ),
+        ModelEntry(
+            id = "gemma3n-e2b-int4",
+            name = "Gemma 3n E2B IT (INT4) — Vision",
+            filename = "gemma-3n-E2B-it-int4.task",
+            sizeLabel = "~3.1 GB",
+            description = "Smaller vision model. May work better on Pixel 7a GPU.",
+            hfRepo = "google/gemma-3n-E2B-it-litert-preview",
+            hfFilename = "gemma-3n-E2B-it-int4.task",
+            supportsVision = true,
+        ),
     )
 
     // ── Directory & file helpers ─────────────────────────────────────────────
