@@ -122,7 +122,7 @@ class LlmService(private val context: Context) {
             val contentList = mutableListOf<Content>()
             if (pendingImage != null) {
                 val jpegBytes = ByteArrayOutputStream().also {
-                    pendingImage.compress(Bitmap.CompressFormat.JPEG, 85, it)
+                    pendingImage.compress(Bitmap.CompressFormat.JPEG, 95, it)
                 }.toByteArray()
                 contentList.add(Content.ImageBytes(jpegBytes))
             }

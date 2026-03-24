@@ -762,15 +762,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun loadImageFromUri(uri: android.net.Uri) {
         val ctx = getApplication<android.app.Application>()
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val original = ctx.contentResolver.openInputStream(uri)?.use {
-                android.graphics.BitmapFactory.decodeStream(it)
+            // ImageDecoder (API 28+) automatically applies EXIF orientation, unlike BitmapFactory.
+            // isMutableRequired ensures software-backed bitmap (required for JPEG compression).
+            val original = try {
+                val source = android.graphics.ImageDecoder.createSource(ctx.contentResolver, uri)
+                android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                    decoder.isMutableRequired = true
+                }
+            } catch (_: Exception) {
+                ctx.contentResolver.openInputStream(uri)?.use {
+                    android.graphics.BitmapFactory.decodeStream(it)
+                }
             } ?: return@launch
-            // Scale down to max 768px on longest side to keep memory usage reasonable
-            val scaled = scaleBitmap(original, 768)
+            // Scale down to max 1024px — larger gives the vision encoder more detail
+            val scaled = scaleBitmap(original, 1024)
             if (scaled !== original) original.recycle()
             val dir = java.io.File(ctx.filesDir, "images").also { it.mkdirs() }
             val file = java.io.File(dir, "${System.currentTimeMillis()}.jpg")
-            file.outputStream().use { scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) }
+            file.outputStream().use { scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, it) }
             withContext(kotlinx.coroutines.Dispatchers.Main) {
                 setPendingImage(scaled, file.absolutePath)
             }
