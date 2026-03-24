@@ -52,6 +52,13 @@ android {
     lint {
         checkReleaseBuilds = false
     }
+
+    applicationVariants.all {
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl).outputFileName =
+                "pocketmonk-v${versionName}.apk"
+        }
+    }
 }
 
 dependencies {
