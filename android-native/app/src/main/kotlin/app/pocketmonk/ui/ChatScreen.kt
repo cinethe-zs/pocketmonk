@@ -1,7 +1,5 @@
 package app.pocketmonk.ui
 
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.speech.RecognizerIntent
@@ -37,11 +35,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.Download
@@ -91,7 +87,6 @@ import app.pocketmonk.ui.theme.SurfaceRaised
 import app.pocketmonk.ui.theme.TextMuted
 import app.pocketmonk.ui.theme.TextPrimary
 import app.pocketmonk.ui.theme.TextSecondary
-import app.pocketmonk.service.ReminderScheduler
 import app.pocketmonk.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
@@ -116,7 +111,6 @@ fun ChatScreen(
     val streamingText by viewModel.streamingText.collectAsState()
     val documentName by viewModel.documentName.collectAsState()
     val personas by viewModel.personas.collectAsState()
-    val sharedText by viewModel.sharedText.collectAsState()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -132,7 +126,6 @@ fun ChatScreen(
     var showNewConversationDialog by remember { mutableStateOf(false) }
     var showDocumentDialog by remember { mutableStateOf(false) }
     var showPersonaDialog by remember { mutableStateOf(false) }
-    var showReminderDialog by remember { mutableStateOf(false) }
     // 0 = off, 1 = Normal, 2 = Deep, 3 = Super Deep, 4 = 5-Forced, 5 = 10-Forced
     var searchLevel by rememberSaveable { mutableStateOf(0) }
 
@@ -254,13 +247,6 @@ fun ChatScreen(
         }
     }
 
-    // Prefill input from share intent
-    LaunchedEffect(sharedText) {
-        val text = sharedText ?: return@LaunchedEffect
-        inputText = text
-        viewModel.consumeSharedText()
-    }
-
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -336,9 +322,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showReminderDialog = true }) {
-                        Icon(Icons.Filled.NotificationsActive, contentDescription = "Reminder", tint = TextSecondary)
-                    }
                     IconButton(onClick = onNavigateToDownload) {
                         Icon(Icons.Filled.Download, contentDescription = "Models", tint = TextSecondary)
                     }
@@ -531,16 +514,6 @@ fun ChatScreen(
                 )
             }
 
-            // Reminder dialog
-            if (showReminderDialog) {
-                ReminderDialog(
-                    onSchedule = { delayMs, message ->
-                        ReminderScheduler.schedule(context, delayMs, message)
-                        showReminderDialog = false
-                    },
-                    onDismiss = { showReminderDialog = false }
-                )
-            }
 
             // Chat input bar
             Surface(
@@ -739,26 +712,6 @@ fun ChatScreen(
                                 Icons.Filled.Mic,
                                 contentDescription = "Voice input",
                                 tint = if (modelReady && !isGenerating && !isCompressing && !isSearching) TextSecondary else TextMuted,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        // Clipboard paste button
-                        IconButton(
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
-                                if (!clip.isNullOrBlank()) {
-                                    inputText = if (inputText.isBlank()) clip
-                                                else "${inputText.trimEnd()} $clip"
-                                }
-                            },
-                            enabled = modelReady && !isCompressing && !isSearching,
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(
-                                Icons.Filled.ContentPaste,
-                                contentDescription = "Paste clipboard",
-                                tint = TextMuted,
                                 modifier = Modifier.size(20.dp)
                             )
                         }

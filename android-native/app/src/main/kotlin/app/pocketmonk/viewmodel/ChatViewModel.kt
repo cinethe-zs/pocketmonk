@@ -74,9 +74,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _personas = MutableStateFlow<List<Persona>>(emptyList())
     val personas: StateFlow<List<Persona>> = _personas.asStateFlow()
 
-    private val _sharedText = MutableStateFlow<String?>(null)
-    val sharedText: StateFlow<String?> = _sharedText.asStateFlow()
-
     // Streaming text for the currently generating assistant message.
     // Kept separate from _currentConversation so each partial update triggers
     // recomposition regardless of StateFlow equality deduplication.
@@ -969,16 +966,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val updated = _personas.value.filter { it.id != id }
         _personas.value = updated
         personaStore.save(updated)
-    }
-
-    // ── Share intent ──────────────────────────────────────────────────────────
-
-    fun setSharedText(text: String) {
-        _sharedText.value = text
-    }
-
-    fun consumeSharedText() {
-        _sharedText.value = null
     }
 
     // ── Backup / restore ──────────────────────────────────────────────────────

@@ -1,6 +1,5 @@
 package app.pocketmonk
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -24,13 +23,6 @@ class MainActivity : ComponentActivity() {
             PocketMonkTheme {
                 val navController = rememberNavController()
                 val viewModel: ChatViewModel = viewModel()
-
-                // Handle text shared from other apps (once on launch)
-                val sharedText = intent?.takeIf { it.action == Intent.ACTION_SEND }
-                    ?.getStringExtra(Intent.EXTRA_TEXT)
-                LaunchedEffect(sharedText) {
-                    if (sharedText != null) viewModel.setSharedText(sharedText)
-                }
 
                 NavHost(navController = navController, startDestination = "launch") {
 
