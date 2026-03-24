@@ -118,7 +118,7 @@ fun ChatScreen(
     var inputText by rememberSaveable { mutableStateOf("") }
     var showSystemPromptBar by remember { mutableStateOf(false) }
     var showNewConversationDialog by remember { mutableStateOf(false) }
-    // 0 = off, 1 = Normal, 2 = Deep, 3 = Super Deep, 4 = 5-Forced, 5 = 10-Forced, 6 = eBay
+    // 0 = off, 1 = Normal, 2 = Deep, 3 = Super Deep, 4 = 5-Forced, 5 = 10-Forced
     var searchLevel by rememberSaveable { mutableStateOf(0) }
 
     val speechLauncher = rememberLauncherForActivityResult(
@@ -490,8 +490,7 @@ fun ChatScreen(
                                     2 -> "Deep" to "model plans queries · sufficiency check"
                                     3 -> "Super Deep" to "reads 5 pages before sufficiency check"
                                     4 -> "5-Forced" to "reads top 5 pages · no sufficiency check"
-                                    5 -> "10-Forced" to "reads top 10 pages · no sufficiency check"
-                                    else -> "Camera search" to "eBay sold · active · best offer · LLM filter"
+                                    else -> "10-Forced" to "reads top 10 pages · no sufficiency check"
                                 }
                                 Text(
                                     "$levelLabel search · $levelDesc · Send to run",
@@ -541,7 +540,7 @@ fun ChatScreen(
                         Spacer(Modifier.width(4.dp))
                         // Search level button — cycles 0→1→2→3→0
                         IconButton(
-                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 7 },
+                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 6 },
                             enabled = modelReady && !isGenerating && !isCompressing && !isSearching,
                             modifier = Modifier.size(44.dp)
                         ) {
