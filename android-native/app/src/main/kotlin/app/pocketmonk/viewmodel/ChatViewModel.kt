@@ -206,7 +206,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             systemPrompt = conv.systemPrompt,
             contextSummary = contextSummary,
             temperature = conv.temperature,
-            pendingImage = pendingBitmap,
+            pendingImagePath = pendingUri,
             onPartial = { partial ->
                 viewModelScope.launch(Dispatchers.Main) {
                     if (_isGenerating.value) {

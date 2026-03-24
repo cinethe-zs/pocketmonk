@@ -1,7 +1,6 @@
 package app.pocketmonk.service
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import app.pocketmonk.model.Message
@@ -20,7 +19,6 @@ import com.google.ai.edge.litertlm.Session
 import com.google.ai.edge.litertlm.SessionConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.CancellationException
 import com.google.ai.edge.litertlm.Message as LitMessage
 
@@ -78,7 +76,7 @@ class LlmService(private val context: Context) {
         systemPrompt: String?,
         contextSummary: String?,
         temperature: Float = 1.0f,
-        pendingImage: Bitmap? = null,
+        pendingImagePath: String? = null,
         onPartial: (String) -> Unit,
         onDone: () -> Unit,
         onError: (String) -> Unit
@@ -128,11 +126,10 @@ class LlmService(private val context: Context) {
             // Build current user turn: optional image first, then text
             val currentMsg = history.last()
             val contentList = mutableListOf<Content>()
-            if (pendingImage != null) {
-                val jpegBytes = ByteArrayOutputStream().also {
-                    pendingImage.compress(Bitmap.CompressFormat.JPEG, 95, it)
-                }.toByteArray()
-                contentList.add(Content.ImageBytes(jpegBytes))
+            if (pendingImagePath != null) {
+                // ImageFile passes the saved JPEG path directly to the native layer,
+                // avoiding an extra Java-side compress/decompress cycle.
+                contentList.add(Content.ImageFile(pendingImagePath))
             }
             contentList.add(Content.Text(currentMsg.content))
 
