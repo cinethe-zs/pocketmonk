@@ -52,9 +52,7 @@ class LlmService(private val context: Context) {
             val e = Engine(
                 EngineConfig(
                     modelPath = modelPath,
-                    // Use GPU for both LM and vision encoder so visual embeddings don't
-                    // cross device boundaries (CPU+GPU mixing caused hallucinations).
-                    backend = if (supportsVision) Backend.GPU() else Backend.CPU(),
+                    backend = Backend.CPU(),
                     visionBackend = if (supportsVision) Backend.GPU() else null,
                     maxNumTokens = maxTokens,
                     cacheDir = context.cacheDir.absolutePath,
