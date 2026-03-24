@@ -84,97 +84,113 @@ class LlmService(private val context: Context) {
         isInferring = true
 
         val onErrorOuter = onError
-        try {
-            // Close any lingering conversation from a previous turn BEFORE creating a new one.
-            // nativeDeleteConversation may be async at the native level, so we close eagerly
-            // here (at the start of the next turn) rather than relying on the previous onDone
-            // callback to have fully released the session.
-            val staleConv = currentConversation
-            currentConversation = null
-            try { staleConv?.close() } catch (_: Exception) {}
 
-            val effectiveTemp = if (temperature < 0.1f) 1.0f else temperature
+        // Grab and clear the stale conversation reference before starting the thread
+        // so that cancel() called during setup sees null and won't try to double-close.
+        val staleConv = currentConversation
+        currentConversation = null
 
-            // System instruction = system prompt + optional context summary
-            val sysText = buildString {
-                if (!systemPrompt.isNullOrBlank()) append(systemPrompt)
-                else append("You are PocketMonk, a helpful private AI assistant running entirely on-device.")
-                if (!contextSummary.isNullOrBlank()) {
-                    append("\n\n[Summary of earlier conversation: $contextSummary]")
+        // Run the entire setup (close + createConversation) on a background thread.
+        // This allows Thread.sleep() retries without blocking the main thread, and
+        // avoids the FAILED_PRECONDITION race where nativeDeleteConversation's async
+        // cleanup hasn't finished before createConversation is called.
+        Thread {
+            try {
+                // Close previous conversation; native delete is async so we retry below.
+                try { staleConv?.close() } catch (_: Exception) {}
+
+                val effectiveTemp = if (temperature < 0.1f) 1.0f else temperature
+                val sysText = buildString {
+                    if (!systemPrompt.isNullOrBlank()) append(systemPrompt)
+                    else append("You are PocketMonk, a helpful private AI assistant running entirely on-device.")
+                    if (!contextSummary.isNullOrBlank()) {
+                        append("\n\n[Summary of earlier conversation: $contextSummary]")
+                    }
                 }
-            }
-
-            // Convert previous history into litertlm Messages.
-            // The LAST item in history is the current user message being sent — exclude it here.
-            val previousHistory = history.dropLast(1)
-            val initialMsgs = buildLitMessages(previousHistory)
-
-            val conversation = eng.createConversation(
-                ConversationConfig(
+                val initialMsgs = buildLitMessages(history.dropLast(1))
+                val config = ConversationConfig(
                     systemInstruction = Contents.of(sysText),
                     initialMessages = initialMsgs,
                     samplerConfig = SamplerConfig(
                         topK = 40, topP = 1.0, temperature = effectiveTemp.toDouble()
                     ),
                 )
-            )
-            currentConversation = conversation
 
-            val currentMsg = history.last()
-            val contentList = listOf(Content.Text(currentMsg.content))
-
-            val watchdog = Runnable {
-                if (isInferring) {
-                    cancel()
-                    mainHandler.post { onErrorOuter("Generation timed out — context may be too long. Tap ↺ to retry.") }
+                // Retry createConversation with backoff — the native slot may not be free yet.
+                var conversation: com.google.ai.edge.litertlm.Conversation? = null
+                var lastConvEx: Exception? = null
+                for (attempt in 0..4) {
+                    if (attempt > 0) Thread.sleep(200L * attempt)
+                    try {
+                        conversation = eng.createConversation(config)
+                        break
+                    } catch (e: Exception) {
+                        lastConvEx = e
+                        if (e.message?.contains("FAILED_PRECONDITION", ignoreCase = true) != true) break
+                    }
                 }
-            }
-            mainHandler.postDelayed(watchdog, 45_000)
 
-            val accumulated = StringBuilder()
-            // sendMessageAsync is non-blocking; callbacks arrive on native threads
-            conversation.sendMessageAsync(
-                Contents.of(contentList),
-                object : MessageCallback {
-                    override fun onMessage(message: LitMessage) {
-                        if (!isInferring) return
-                        val chunk = message.toString()
-                        accumulated.append(chunk)
-                        mainHandler.removeCallbacks(watchdog)
-                        val snapshot = accumulated.toString().cleaned()
-                        mainHandler.post { onPartial(snapshot) }
+                if (conversation == null) {
+                    val msg = lastConvEx?.message ?: "Failed to create conversation"
+                    mainHandler.post { isInferring = false; onErrorOuter(msg) }
+                    return@Thread
+                }
+
+                // If cancel() was called while we were setting up, abort cleanly.
+                if (!isInferring) {
+                    try { conversation.close() } catch (_: Exception) {}
+                    return@Thread
+                }
+                currentConversation = conversation
+
+                val contentList = listOf(Content.Text(history.last().content))
+                val watchdog = Runnable {
+                    if (isInferring) {
+                        cancel()
+                        mainHandler.post { onErrorOuter("Generation timed out — context may be too long. Tap ↺ to retry.") }
                     }
+                }
+                mainHandler.postDelayed(watchdog, 45_000)
 
-                    override fun onDone() {
-                        mainHandler.removeCallbacks(watchdog)
-                        mainHandler.post {
-                            isInferring = false
-                            // Don't close conversation here — keep it alive and close it at
-                            // the start of the next chat() call. nativeDeleteConversation
-                            // appears to be async; closing too early causes the engine to
-                            // still report "session already exists" on the next createConversation.
-                            onDone()
+                val accumulated = StringBuilder()
+                conversation.sendMessageAsync(
+                    Contents.of(contentList),
+                    object : MessageCallback {
+                        override fun onMessage(message: LitMessage) {
+                            if (!isInferring) return
+                            accumulated.append(message.toString())
+                            mainHandler.removeCallbacks(watchdog)
+                            mainHandler.post { onPartial(accumulated.toString().cleaned()) }
                         }
-                    }
 
-                    override fun onError(throwable: Throwable) {
-                        mainHandler.removeCallbacks(watchdog)
-                        mainHandler.post {
-                            isInferring = false
-                            if (throwable is CancellationException) {
-                                onDone()  // user-initiated stop → clean finish
-                            } else {
-                                onErrorOuter(throwable.message ?: "Unknown error during inference")
+                        override fun onDone() {
+                            mainHandler.removeCallbacks(watchdog)
+                            mainHandler.post {
+                                isInferring = false
+                                // Keep conversation alive — close it at the start of the next
+                                // chat() call once the native async delete has had time to finish.
+                                onDone()
+                            }
+                        }
+
+                        override fun onError(throwable: Throwable) {
+                            mainHandler.removeCallbacks(watchdog)
+                            mainHandler.post {
+                                isInferring = false
+                                if (throwable is CancellationException) onDone()
+                                else onErrorOuter(throwable.message ?: "Unknown error during inference")
                             }
                         }
                     }
+                )
+            } catch (e: Exception) {
+                mainHandler.post {
+                    isInferring = false
+                    currentConversation = null
+                    onErrorOuter(e.message ?: "Unknown error during inference")
                 }
-            )
-        } catch (e: Exception) {
-            isInferring = false
-            currentConversation = null
-            onErrorOuter(e.message ?: "Unknown error during inference")
-        }
+            }
+        }.start()
     }
 
     // ──────────────────────────────────────────────────────────
@@ -474,12 +490,17 @@ class LlmService(private val context: Context) {
 
     /** Runs [block] on a fresh Session, closing it afterward. Returns null on any exception. */
     private fun <T> runSession(eng: Engine, block: (Session) -> T): T? {
+        var session: Session? = null
         return try {
-            val session = eng.createSession()
+            session = eng.createSession()
             val result = block(session)
             try { session.close() } catch (_: Exception) {}
             result
         } catch (e: Exception) {
+            // Always close the session, even when block() throws — otherwise the
+            // native session leaks and all subsequent createConversation() calls fail
+            // with FAILED_PRECONDITION "a session already exists".
+            try { session?.close() } catch (_: Exception) {}
             null
         }
     }
