@@ -6,6 +6,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +22,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
@@ -146,6 +150,23 @@ private fun UserBubble(
         horizontalAlignment = Alignment.End,
         modifier = modifier.fillMaxWidth()
     ) {
+        // Image thumbnail (shown above the bubble when the message has an attached image)
+        val imageBitmap = remember(message.imageUri) {
+            message.imageUri?.let { runCatching { BitmapFactory.decodeFile(it) }.getOrNull() }
+        }
+        if (imageBitmap != null) {
+            Image(
+                bitmap = imageBitmap.asImageBitmap(),
+                contentDescription = "Attached image",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(12.dp))
+            )
+            Spacer(Modifier.height(4.dp))
+        }
+
         Box(
             modifier = Modifier
                 .widthIn(max = 300.dp)

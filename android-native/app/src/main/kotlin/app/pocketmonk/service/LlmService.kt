@@ -1,10 +1,12 @@
 package app.pocketmonk.service
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import app.pocketmonk.model.Message
 import app.pocketmonk.model.MessageRole
+import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +59,7 @@ class LlmService(private val context: Context) {
         systemPrompt: String?,
         contextSummary: String?,
         temperature: Float = 1.0f,
+        pendingImage: Bitmap? = null,
         onPartial: (String) -> Unit,
         onDone: () -> Unit,
         onError: (String) -> Unit
@@ -83,7 +86,18 @@ class LlmService(private val context: Context) {
             val session = LlmInferenceSession.createFromOptions(engine, sessionOptions)
             currentSession = session
 
-            session.addQueryChunk(prompt)
+            if (pendingImage != null) {
+                val (pre, post) = formatPromptWithImageSplit(history, systemPrompt, contextSummary)
+                session.addQueryChunk(pre)
+                try {
+                    session.addImage(BitmapImageBuilder(pendingImage).build())
+                } catch (_: Exception) {
+                    // Model doesn't support vision — fall back to text-only
+                }
+                session.addQueryChunk(post)
+            } else {
+                session.addQueryChunk(prompt)
+            }
 
             // Watchdog: if no token arrives within 45 s, cancel and report error
             val watchdog = Runnable {
@@ -481,6 +495,25 @@ class LlmService(private val context: Context) {
 
     /** Replaces literal \n and \t sequences with actual newlines/tabs from model output. */
     private fun String.cleaned() = replace("\\n", "\n").replace("\\t", "\t")
+
+    /**
+     * Splits the full prompt at the start of the last user turn so an image can be
+     * inserted between the two halves: [pre] → addImage() → [post].
+     * pre  = everything up to and including "<start_of_turn>user\n" of the last turn
+     * post = the user's text + closing tags + model turn start
+     */
+    private fun formatPromptWithImageSplit(
+        messages: List<Message>,
+        systemPrompt: String?,
+        contextSummary: String?
+    ): Pair<String, String> {
+        val full = formatPrompt(messages, systemPrompt, contextSummary)
+        val marker = "<start_of_turn>user\n"
+        val lastIdx = full.lastIndexOf(marker)
+        if (lastIdx < 0) return Pair(full, "")
+        val split = lastIdx + marker.length
+        return Pair(full.substring(0, split), full.substring(split))
+    }
 
     private fun formatPrompt(
         messages: List<Message>,
