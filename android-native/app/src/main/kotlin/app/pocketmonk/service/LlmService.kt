@@ -38,7 +38,6 @@ class LlmService(private val context: Context) {
     suspend fun initialize(
         modelPath: String,
         maxTokens: Int = 2048,
-        supportsVision: Boolean = false,
     ) = withContext(Dispatchers.IO) {
         dispose()
 
@@ -53,7 +52,6 @@ class LlmService(private val context: Context) {
                 EngineConfig(
                     modelPath = modelPath,
                     backend = Backend.CPU(),
-                    visionBackend = if (supportsVision) Backend.GPU() else null,
                     maxNumTokens = maxTokens,
                     cacheDir = context.cacheDir.absolutePath,
                 )
@@ -76,7 +74,6 @@ class LlmService(private val context: Context) {
         systemPrompt: String?,
         contextSummary: String?,
         temperature: Float = 1.0f,
-        pendingImagePath: String? = null,
         onPartial: (String) -> Unit,
         onDone: () -> Unit,
         onError: (String) -> Unit
@@ -123,15 +120,8 @@ class LlmService(private val context: Context) {
             )
             currentConversation = conversation
 
-            // Build current user turn: optional image first, then text
             val currentMsg = history.last()
-            val contentList = mutableListOf<Content>()
-            if (pendingImagePath != null) {
-                // ImageFile passes the saved JPEG path directly to the native layer,
-                // avoiding an extra Java-side compress/decompress cycle.
-                contentList.add(Content.ImageFile(pendingImagePath))
-            }
-            contentList.add(Content.Text(currentMsg.content))
+            val contentList = listOf(Content.Text(currentMsg.content))
 
             val watchdog = Runnable {
                 if (isInferring) {

@@ -16,5 +16,4 @@ data class Message(
     var isArchived: Boolean = false,
     var isSearchResult: Boolean = false,
     var isSearchLog: Boolean = false,
-    var imageUri: String? = null       // local file path for attached image
 )

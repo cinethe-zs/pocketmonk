@@ -31,14 +31,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Summarize
@@ -78,8 +75,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.pocketmonk.ui.theme.Accent
@@ -114,7 +109,6 @@ fun ChatScreen(
     val modelReady by viewModel.modelReady.collectAsState()
     val streamingText by viewModel.streamingText.collectAsState()
     val documentName by viewModel.documentName.collectAsState()
-    val pendingImageUri by viewModel.pendingImageUri.collectAsState()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -135,17 +129,6 @@ fun ChatScreen(
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri -> uri?.let { viewModel.loadDocumentFromUri(it) } }
-
-    val imagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri -> uri?.let { viewModel.loadImageFromUri(it) } }
-
-    // Check whether the active model supports vision
-    val supportsVision = remember(currentConversation?.modelPath) {
-        val filename = currentConversation?.modelPath
-            ?.let { java.io.File(it).name } ?: return@remember false
-        viewModel.modelManager.catalog.any { it.filename == filename && it.supportsVision }
-    }
 
     val speechLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -551,58 +534,6 @@ fun ChatScreen(
                         }
                     }
 
-                    // Image preview pill — visible when an image is attached
-                    AnimatedVisibility(
-                        visible = pendingImageUri != null,
-                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 4.dp)
-                        ) {
-                            val thumbBitmap = remember(pendingImageUri) {
-                                pendingImageUri?.let { runCatching { BitmapFactory.decodeFile(it) }.getOrNull() }
-                            }
-                            if (thumbBitmap != null) {
-                                Image(
-                                    bitmap = thumbBitmap.asImageBitmap(),
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                )
-                                Spacer(Modifier.width(8.dp))
-                            } else {
-                                Icon(
-                                    Icons.Filled.Image,
-                                    contentDescription = null,
-                                    tint = Accent,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                            }
-                            Text(
-                                text = pendingImageUri?.let { java.io.File(it).name } ?: "Image attached",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Accent,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "✕",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted,
-                                modifier = Modifier.clickable { viewModel.clearPendingImage() }
-                            )
-                        }
-                    }
-
                     // Document pill — visible when a document is loaded
                     AnimatedVisibility(
                         visible = documentName != null,
@@ -680,22 +611,6 @@ fun ChatScreen(
                                 tint = if (documentName != null) Accent else TextMuted,
                                 modifier = Modifier.size(20.dp)
                             )
-                        }
-                        // Image attach button — only shown when active model supports vision
-                        if (supportsVision) {
-                            Spacer(Modifier.width(4.dp))
-                            IconButton(
-                                onClick = { imagePicker.launch("image/*") },
-                                enabled = modelReady && !isGenerating && !isCompressing && !isSearching,
-                                modifier = Modifier.size(44.dp)
-                            ) {
-                                Icon(
-                                    Icons.Filled.Image,
-                                    contentDescription = "Attach image",
-                                    tint = if (pendingImageUri != null) Accent else TextMuted,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
                         }
                         Spacer(Modifier.width(4.dp))
                         // Search level button — cycles 0→1→2→3→0

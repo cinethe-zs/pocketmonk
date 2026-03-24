@@ -18,7 +18,6 @@ data class ModelEntry(
     val hfRepo: String,            // e.g. "litert-community/Gemma3-1B-IT"
     val hfFilename: String,        // file inside the HF repo
     val recommendedForPixel7a: Boolean = false,
-    val supportsVision: Boolean = false,
 )
 
 sealed class DownloadState {
@@ -68,26 +67,6 @@ class ModelManager(private val context: Context) {
             description = "Better quality, needs 3+ GB free RAM.",
             hfRepo = "litert-community/Gemma2-2B-IT",
             hfFilename = "Gemma2-2B-IT_multi-prefill-seq_q8_ekv1280.task",
-        ),
-        ModelEntry(
-            id = "gemma3n-e4b-int4",
-            name = "Gemma 3n E4B IT (INT4) — Vision",
-            filename = "gemma-3n-E4B-it-int4.task",
-            sizeLabel = "~4.4 GB",
-            description = "Text + image input. ⚠ Vision broken on Pixel 7a/7/6 (Tensor G2/G1 GPU driver issue).",
-            hfRepo = "google/gemma-3n-E4B-it-litert-preview",
-            hfFilename = "gemma-3n-E4B-it-int4.task",
-            supportsVision = true,
-        ),
-        ModelEntry(
-            id = "gemma3n-e2b-int4",
-            name = "Gemma 3n E2B IT (INT4) — Vision",
-            filename = "gemma-3n-E2B-it-int4.task",
-            sizeLabel = "~3.1 GB",
-            description = "Text + image input. ⚠ Vision broken on Pixel 7a/7/6 (Tensor G2/G1 GPU driver issue).",
-            hfRepo = "google/gemma-3n-E2B-it-litert-preview",
-            hfFilename = "gemma-3n-E2B-it-int4.task",
-            supportsVision = true,
         ),
     )
 

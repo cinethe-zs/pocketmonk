@@ -62,10 +62,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val documentName: StateFlow<String?> = _documentName.asStateFlow()
     private val _documentContent = MutableStateFlow<String?>(null)
 
-    private val _pendingImageBitmap = MutableStateFlow<android.graphics.Bitmap?>(null)
-    private val _pendingImageUri = MutableStateFlow<String?>(null)
-    val pendingImageUri: StateFlow<String?> = _pendingImageUri.asStateFlow()
-
     private val _modelReady = MutableStateFlow(false)
     val modelReady: StateFlow<Boolean> = _modelReady.asStateFlow()
 
@@ -111,10 +107,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _modelReady.value = false
             _errorMessage.value = null
             try {
-                val supportsVision = modelManager.catalog.any {
-                    it.filename == java.io.File(modelPath).name && it.supportsVision
-                }
-                llmService.initialize(modelPath, maxTokens = contextSize, supportsVision = supportsVision)
+                llmService.initialize(modelPath, maxTokens = contextSize)
                 _modelReady.value = true
                 // Ensure there's an active conversation to show in ChatScreen
                 if (_currentConversation.value == null) {
@@ -151,14 +144,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val pendingBitmap = _pendingImageBitmap.value
-        val pendingUri = _pendingImageUri.value
-        clearPendingImage()
-
         val userMessage = Message(
             role = MessageRole.USER,
             content = text.trim(),
-            imageUri = pendingUri
         )
         conv.messages.add(userMessage)
         _currentConversation.value = conv.copy(messages = conv.messages)
@@ -206,7 +194,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             systemPrompt = conv.systemPrompt,
             contextSummary = contextSummary,
             temperature = conv.temperature,
-            pendingImagePath = pendingUri,
             onPartial = { partial ->
                 viewModelScope.launch(Dispatchers.Main) {
                     if (_isGenerating.value) {
@@ -707,7 +694,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun newConversation(modelPath: String? = null, contextSize: Int? = null, temperature: Float? = null) {
         clearDocument()
-        clearPendingImage()
         val path = modelPath ?: currentModelPath ?: return
         val size = contextSize ?: currentContextSize
         val temp = temperature ?: 1.0f
@@ -732,7 +718,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadConversation(conv: Conversation) {
         clearDocument()
-        clearPendingImage()
         _currentConversation.value = conv
         _errorMessage.value = null
         checkAndAutoRetry()
@@ -746,53 +731,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun clearDocument() {
         _documentName.value = null
         _documentContent.value = null
-    }
-
-    fun setPendingImage(bitmap: android.graphics.Bitmap, savedPath: String) {
-        _pendingImageBitmap.value?.recycle()
-        _pendingImageBitmap.value = bitmap
-        _pendingImageUri.value = savedPath
-    }
-
-    fun clearPendingImage() {
-        _pendingImageBitmap.value = null   // don't recycle — bitmap still used in message bubble
-        _pendingImageUri.value = null
-    }
-
-    fun loadImageFromUri(uri: android.net.Uri) {
-        val ctx = getApplication<android.app.Application>()
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            // ImageDecoder (API 28+) automatically applies EXIF orientation, unlike BitmapFactory.
-            // isMutableRequired ensures software-backed bitmap (required for JPEG compression).
-            val original = try {
-                val source = android.graphics.ImageDecoder.createSource(ctx.contentResolver, uri)
-                android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                    decoder.isMutableRequired = true
-                }
-            } catch (_: Exception) {
-                ctx.contentResolver.openInputStream(uri)?.use {
-                    android.graphics.BitmapFactory.decodeStream(it)
-                }
-            } ?: return@launch
-            // Scale down to max 1024px — larger gives the vision encoder more detail
-            val scaled = scaleBitmap(original, 1024)
-            if (scaled !== original) original.recycle()
-            val dir = java.io.File(ctx.filesDir, "images").also { it.mkdirs() }
-            val file = java.io.File(dir, "${System.currentTimeMillis()}.jpg")
-            file.outputStream().use { scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, it) }
-            withContext(kotlinx.coroutines.Dispatchers.Main) {
-                setPendingImage(scaled, file.absolutePath)
-            }
-        }
-    }
-
-    private fun scaleBitmap(bitmap: android.graphics.Bitmap, maxDim: Int): android.graphics.Bitmap {
-        val w = bitmap.width; val h = bitmap.height
-        if (w <= maxDim && h <= maxDim) return bitmap
-        val scale = maxDim.toFloat() / maxOf(w, h)
-        return android.graphics.Bitmap.createScaledBitmap(
-            bitmap, (w * scale).toInt(), (h * scale).toInt(), true
-        )
     }
 
     fun loadDocumentFromUri(uri: android.net.Uri) {
