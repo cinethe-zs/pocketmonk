@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -31,6 +32,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -44,6 +46,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -105,6 +108,7 @@ fun ChatScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val modelReady by viewModel.modelReady.collectAsState()
     val streamingText by viewModel.streamingText.collectAsState()
+    val documentName by viewModel.documentName.collectAsState()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -118,8 +122,13 @@ fun ChatScreen(
     var inputText by rememberSaveable { mutableStateOf("") }
     var showSystemPromptBar by remember { mutableStateOf(false) }
     var showNewConversationDialog by remember { mutableStateOf(false) }
+    var showDocumentDialog by remember { mutableStateOf(false) }
     // 0 = off, 1 = Normal, 2 = Deep, 3 = Super Deep, 4 = 5-Forced, 5 = 10-Forced
     var searchLevel by rememberSaveable { mutableStateOf(0) }
+
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let { viewModel.loadDocumentFromUri(it) } }
 
     val speechLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -436,6 +445,21 @@ fun ChatScreen(
                 onCompress = { viewModel.compressContext() }
             )
 
+            // Document Q&A dialog
+            if (showDocumentDialog) {
+                DocumentDialog(
+                    onConfirmPaste = { name, text ->
+                        viewModel.loadDocument(name, text)
+                        showDocumentDialog = false
+                    },
+                    onPickFile = {
+                        filePicker.launch("text/*")
+                        showDocumentDialog = false
+                    },
+                    onDismiss = { showDocumentDialog = false }
+                )
+            }
+
             // New conversation dialog
             if (showNewConversationDialog) {
                 NewConversationDialog(
@@ -510,6 +534,43 @@ fun ChatScreen(
                         }
                     }
 
+                    // Document pill — visible when a document is loaded
+                    AnimatedVisibility(
+                        visible = documentName != null,
+                        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.AttachFile,
+                                contentDescription = null,
+                                tint = Accent,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = documentName ?: "",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Accent,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "✕",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted,
+                                modifier = Modifier.clickable { viewModel.clearDocument() }
+                            )
+                        }
+                    }
+
                     Row(
                         verticalAlignment = Alignment.Bottom,
                         modifier = Modifier
@@ -537,6 +598,20 @@ fun ChatScreen(
                                 disabledContainerColor = Background
                             )
                         )
+                        Spacer(Modifier.width(4.dp))
+                        // Document attach button
+                        IconButton(
+                            onClick = { if (!isSearching) showDocumentDialog = true },
+                            enabled = modelReady && !isGenerating && !isCompressing && !isSearching,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.AttachFile,
+                                contentDescription = "Load document",
+                                tint = if (documentName != null) Accent else TextMuted,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                         Spacer(Modifier.width(4.dp))
                         // Search level button — cycles 0→1→2→3→0
                         IconButton(
@@ -638,6 +713,69 @@ fun ChatScreen(
     }
 }
 
+
+@Composable
+private fun DocumentDialog(
+    onConfirmPaste: (name: String, text: String) -> Unit,
+    onPickFile: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var pastedText by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Load document", color = TextPrimary) },
+        text = {
+            Column {
+                Text(
+                    "Paste text below or load a .txt file. Up to 8 000 characters will be used as context for your questions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = pastedText,
+                    onValueChange = { pastedText = it },
+                    placeholder = { Text("Paste document text here…", color = TextMuted) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 220.dp),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = TextPrimary),
+                    maxLines = 12,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent,
+                        unfocusedBorderColor = Border,
+                        focusedContainerColor = Background,
+                        unfocusedContainerColor = Background,
+                        cursorColor = Accent
+                    )
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.TextButton(
+                    onClick = onPickFile,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Load .txt file instead", color = Accent, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(
+                onClick = {
+                    if (pastedText.isNotBlank()) onConfirmPaste("Pasted text", pastedText.trim())
+                    else onDismiss()
+                }
+            ) { Text("Load", color = Accent) }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextMuted)
+            }
+        },
+        containerColor = SurfaceRaised
+    )
+}
 
 @Composable
 private fun LiveSearchLogCard(log: String, modifier: Modifier = Modifier) {

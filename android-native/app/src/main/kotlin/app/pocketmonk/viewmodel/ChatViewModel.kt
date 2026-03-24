@@ -58,6 +58,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
+    private val _documentName = MutableStateFlow<String?>(null)
+    val documentName: StateFlow<String?> = _documentName.asStateFlow()
+    private val _documentContent = MutableStateFlow<String?>(null)
+
     private val _modelReady = MutableStateFlow(false)
     val modelReady: StateFlow<Boolean> = _modelReady.asStateFlow()
 
@@ -158,9 +162,31 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _errorMessage.value = null
 
         val contextSummary = conv.messages.firstOrNull { it.isSummary }?.content
-        val historyForPrompt = conv.messages.filter {
+        val baseHistory = conv.messages.filter {
             !it.isSummary && !it.isArchived &&
             it.status != MessageStatus.STREAMING && it.status != MessageStatus.ERROR
+        }
+        // Inject document context immediately before the last user message so
+        // formatPrompt merges them into a single user turn (same as web search).
+        val historyForPrompt: List<Message> = run {
+            val docContent = _documentContent.value
+            val docName = _documentName.value
+            if (docContent != null && docName != null) {
+                val lastUserIdx = baseHistory.indexOfLast {
+                    it.role == MessageRole.USER && !it.isSearchLog
+                }
+                if (lastUserIdx >= 0) {
+                    buildList {
+                        addAll(baseHistory.take(lastUserIdx))
+                        add(Message(
+                            role = MessageRole.USER,
+                            content = "[Document: \"$docName\"]\n\n$docContent",
+                            isSearchResult = true
+                        ))
+                        addAll(baseHistory.drop(lastUserIdx))
+                    }
+                } else baseHistory
+            } else baseHistory
         }
 
         llmService.chat(
@@ -667,6 +693,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newConversation(modelPath: String? = null, contextSize: Int? = null, temperature: Float? = null) {
+        clearDocument()
         val path = modelPath ?: currentModelPath ?: return
         val size = contextSize ?: currentContextSize
         val temp = temperature ?: 1.0f
@@ -690,9 +717,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadConversation(conv: Conversation) {
+        clearDocument()
         _currentConversation.value = conv
         _errorMessage.value = null
         checkAndAutoRetry()
+    }
+
+    fun loadDocument(name: String, content: String) {
+        _documentName.value = name
+        _documentContent.value = content.take(8000)
+    }
+
+    fun clearDocument() {
+        _documentName.value = null
+        _documentContent.value = null
+    }
+
+    fun loadDocumentFromUri(uri: android.net.Uri) {
+        val ctx = getApplication<android.app.Application>()
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val stream = ctx.contentResolver.openInputStream(uri) ?: return@launch
+            val content = stream.bufferedReader().readText().take(8000)
+            val name = ctx.contentResolver.query(
+                uri,
+                arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                cursor.moveToFirst()
+                cursor.getString(0)
+            } ?: uri.lastPathSegment ?: "document.txt"
+            withContext(kotlinx.coroutines.Dispatchers.Main) {
+                loadDocument(name, content)
+            }
+        }
     }
 
     fun deleteConversation(id: String) {

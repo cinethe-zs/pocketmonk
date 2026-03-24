@@ -85,7 +85,11 @@ fun ConversationDrawer(
 
     val filtered = conversations.filter { conv ->
         val matchesSearch = searchQuery.isBlank() ||
-            conv.title.contains(searchQuery, ignoreCase = true)
+            conv.title.contains(searchQuery, ignoreCase = true) ||
+            conv.messages.any { msg ->
+                !msg.isSummary && !msg.isSearchLog &&
+                msg.content.contains(searchQuery, ignoreCase = true)
+            }
         val matchesTag = selectedTag == null || conv.tags.contains(selectedTag)
         matchesSearch && matchesTag
     }
@@ -147,7 +151,7 @@ fun ConversationDrawer(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("Search conversations…", color = TextMuted) },
+            placeholder = { Text("Search titles & messages…", color = TextMuted) },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 4.dp),

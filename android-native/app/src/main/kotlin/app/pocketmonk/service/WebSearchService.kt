@@ -19,6 +19,14 @@ class WebSearchService {
 
     private data class LevelConfig(val maxResults: Int, val pagesToFetch: Int)
 
+    // Session-level LRU cache: URL → full extracted page text.
+    // Avoids re-fetching the same page in multi-iteration deep searches.
+    private val pageCache: MutableMap<String, String> = java.util.Collections.synchronizedMap(
+        object : java.util.LinkedHashMap<String, String>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, String>) = size > 40
+        }
+    )
+
     private val levels = mapOf(
         0 to LevelConfig(maxResults = 10, pagesToFetch = 5),  // Sub-query  – internal use by Mega Deep
         1 to LevelConfig(maxResults = 6, pagesToFetch = 2),   // Normal     – top 2 pages
@@ -171,6 +179,11 @@ class WebSearchService {
     // ── Page fetcher ──────────────────────────────────────────────────────────
 
     private fun fetchPageContent(url: String, maxChars: Int): String {
+        // Return cached full text, trimmed to requested budget
+        val cached = pageCache[url]
+        if (cached != null) {
+            return if (cached.length > maxChars) cached.take(maxChars) + "…" else cached
+        }
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.apply {
             requestMethod = "GET"
@@ -183,7 +196,9 @@ class WebSearchService {
         }
         if (conn.responseCode !in 200..299) return ""
         val html = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
-        return extractMainText(html, maxChars)
+        val full = extractMainText(html, Int.MAX_VALUE)
+        pageCache[url] = full
+        return if (full.length > maxChars) full.take(maxChars) + "…" else full
     }
 
     /**
