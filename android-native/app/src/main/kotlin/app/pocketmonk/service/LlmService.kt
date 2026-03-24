@@ -55,8 +55,7 @@ class LlmService(private val context: Context) {
                 EngineConfig(
                     modelPath = modelPath,
                     backend = Backend.CPU(),
-                    // Try CPU vision backend first — GPU (Mali-G710) may not support LiteRT vision ops
-                    visionBackend = if (supportsVision) Backend.CPU() else null,
+                    visionBackend = if (supportsVision) Backend.GPU() else null,
                     maxNumTokens = maxTokens,
                     cacheDir = context.cacheDir.absolutePath,
                 )
@@ -91,6 +90,14 @@ class LlmService(private val context: Context) {
 
         val onErrorOuter = onError
         try {
+            // Close any lingering conversation from a previous turn BEFORE creating a new one.
+            // nativeDeleteConversation may be async at the native level, so we close eagerly
+            // here (at the start of the next turn) rather than relying on the previous onDone
+            // callback to have fully released the session.
+            val staleConv = currentConversation
+            currentConversation = null
+            try { staleConv?.close() } catch (_: Exception) {}
+
             val effectiveTemp = if (temperature < 0.1f) 1.0f else temperature
 
             // System instruction = system prompt + optional context summary
@@ -155,8 +162,10 @@ class LlmService(private val context: Context) {
                         mainHandler.removeCallbacks(watchdog)
                         mainHandler.post {
                             isInferring = false
-                            currentConversation = null
-                            try { conversation.close() } catch (_: Exception) {}
+                            // Don't close conversation here — keep it alive and close it at
+                            // the start of the next chat() call. nativeDeleteConversation
+                            // appears to be async; closing too early causes the engine to
+                            // still report "session already exists" on the next createConversation.
                             onDone()
                         }
                     }
@@ -165,8 +174,6 @@ class LlmService(private val context: Context) {
                         mainHandler.removeCallbacks(watchdog)
                         mainHandler.post {
                             isInferring = false
-                            currentConversation = null
-                            try { conversation.close() } catch (_: Exception) {}
                             if (throwable is CancellationException) {
                                 onDone()  // user-initiated stop → clean finish
                             } else {
