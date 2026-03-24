@@ -95,12 +95,9 @@ class LlmService(private val context: Context) {
 
             if (pendingImage != null) {
                 val (pre, post) = formatPromptWithImageSplit(history, systemPrompt, contextSummary)
-                session.addQueryChunk(pre)
-                try {
-                    session.addImage(BitmapImageBuilder(pendingImage).build())
-                } catch (_: Exception) {
-                    // Model doesn't support vision — fall back to text-only
-                }
+                // pre ends with "<start_of_turn>user\n" — add the <image> token expected by Gemma 3n
+                session.addQueryChunk("$pre<image>\n")
+                session.addImage(BitmapImageBuilder(pendingImage).build())
                 session.addQueryChunk(post)
             } else {
                 session.addQueryChunk(prompt)
