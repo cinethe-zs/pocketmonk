@@ -55,9 +55,10 @@ class LlmService(private val context: Context) {
                 EngineConfig(
                     modelPath = modelPath,
                     backend = Backend.CPU(),
-                    // Gemma 3n vision encoder requires GPU backend; null disables vision pipeline
-                    visionBackend = if (supportsVision) Backend.GPU() else null,
+                    // Try CPU vision backend first — GPU (Mali-G710) may not support LiteRT vision ops
+                    visionBackend = if (supportsVision) Backend.CPU() else null,
                     maxNumTokens = maxTokens,
+                    cacheDir = context.cacheDir.absolutePath,
                 )
             )
             e.initialize()
