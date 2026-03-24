@@ -26,8 +26,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Tag
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -75,6 +78,9 @@ fun ConversationDrawer(
     onAddTag: (Conversation, String) -> Unit,
     onRemoveTag: (Conversation, String) -> Unit,
     onClose: () -> Unit,
+    onPersonas: () -> Unit = {},
+    onBackup: () -> Unit = {},
+    onRestore: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -144,6 +150,46 @@ fun ConversationDrawer(
                 Icon(Icons.Filled.Add, contentDescription = null, tint = Accent)
                 Spacer(Modifier.width(8.dp))
                 Text("New conversation", color = Accent)
+            }
+        }
+
+        // Personas button
+        TextButton(
+            onClick = { onPersonas(); onClose() },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 0.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Start,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Filled.Person, contentDescription = null, tint = TextSecondary)
+                Spacer(Modifier.width(8.dp))
+                Text("Personas", color = TextSecondary)
+            }
+        }
+
+        // Backup / Restore row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 0.dp)
+        ) {
+            TextButton(onClick = { onBackup(); onClose() }, modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Upload, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Backup", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            TextButton(onClick = { onRestore(); onClose() }, modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Download, contentDescription = null, tint = TextMuted, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Restore", color = TextMuted, style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
 

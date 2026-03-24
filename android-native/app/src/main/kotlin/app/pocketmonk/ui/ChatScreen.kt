@@ -1,6 +1,9 @@
 package app.pocketmonk.ui
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,9 +37,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.Download
@@ -86,6 +91,7 @@ import app.pocketmonk.ui.theme.SurfaceRaised
 import app.pocketmonk.ui.theme.TextMuted
 import app.pocketmonk.ui.theme.TextPrimary
 import app.pocketmonk.ui.theme.TextSecondary
+import app.pocketmonk.service.ReminderScheduler
 import app.pocketmonk.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
@@ -109,6 +115,8 @@ fun ChatScreen(
     val modelReady by viewModel.modelReady.collectAsState()
     val streamingText by viewModel.streamingText.collectAsState()
     val documentName by viewModel.documentName.collectAsState()
+    val personas by viewModel.personas.collectAsState()
+    val sharedText by viewModel.sharedText.collectAsState()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -123,12 +131,32 @@ fun ChatScreen(
     var showSystemPromptBar by remember { mutableStateOf(false) }
     var showNewConversationDialog by remember { mutableStateOf(false) }
     var showDocumentDialog by remember { mutableStateOf(false) }
+    var showPersonaDialog by remember { mutableStateOf(false) }
+    var showReminderDialog by remember { mutableStateOf(false) }
     // 0 = off, 1 = Normal, 2 = Deep, 3 = Super Deep, 4 = 5-Forced, 5 = 10-Forced
     var searchLevel by rememberSaveable { mutableStateOf(0) }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri -> uri?.let { viewModel.loadDocumentFromUri(it) } }
+
+    val backupSaver = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        uri?.let { dest ->
+            val json = viewModel.exportBackup()
+            context.contentResolver.openOutputStream(dest)?.use { it.write(json.toByteArray()) }
+        }
+    }
+
+    val restorePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { src ->
+            val json = context.contentResolver.openInputStream(src)?.bufferedReader()?.readText() ?: return@let
+            viewModel.importBackup(json)
+        }
+    }
 
     val speechLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -226,6 +254,13 @@ fun ChatScreen(
         }
     }
 
+    // Prefill input from share intent
+    LaunchedEffect(sharedText) {
+        val text = sharedText ?: return@LaunchedEffect
+        inputText = text
+        viewModel.consumeSharedText()
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -237,7 +272,14 @@ fun ChatScreen(
                 onDelete = { viewModel.deleteConversation(it) },
                 onAddTag = { conv, tag -> viewModel.addTag(conv, tag) },
                 onRemoveTag = { conv, tag -> viewModel.removeTag(conv, tag) },
-                onClose = { scope.launch { drawerState.close() } }
+                onClose = { scope.launch { drawerState.close() } },
+                onPersonas = { showPersonaDialog = true },
+                onBackup = {
+                    val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmm", java.util.Locale.getDefault())
+                        .format(java.util.Date())
+                    backupSaver.launch("pocketmonk_backup_$timestamp.json")
+                },
+                onRestore = { restorePicker.launch("application/json") }
             )
         },
         modifier = modifier
@@ -294,6 +336,9 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showReminderDialog = true }) {
+                        Icon(Icons.Filled.NotificationsActive, contentDescription = "Reminder", tint = TextSecondary)
+                    }
                     IconButton(onClick = onNavigateToDownload) {
                         Icon(Icons.Filled.Download, contentDescription = "Models", tint = TextSecondary)
                     }
@@ -467,11 +512,33 @@ fun ChatScreen(
                     currentModelPath = viewModel.modelManager.getActiveModelPath(),
                     currentContextSize = currentConversation?.contextSize ?: 2048,
                     currentTemperature = currentConversation?.temperature?.takeIf { it >= 0.1f } ?: 1.0f,
-                    onConfirm = { modelPath, contextSize, temperature ->
+                    personas = personas,
+                    onConfirm = { modelPath, contextSize, temperature, systemPrompt ->
                         showNewConversationDialog = false
-                        viewModel.newConversation(modelPath, contextSize, temperature)
+                        viewModel.newConversation(modelPath, contextSize, temperature, systemPrompt)
                     },
                     onDismiss = { showNewConversationDialog = false }
+                )
+            }
+
+            // Persona manager dialog
+            if (showPersonaDialog) {
+                PersonaDialog(
+                    personas = personas,
+                    onSave = { name, prompt -> viewModel.savePersona(name, prompt) },
+                    onDelete = { id -> viewModel.deletePersona(id) },
+                    onDismiss = { showPersonaDialog = false }
+                )
+            }
+
+            // Reminder dialog
+            if (showReminderDialog) {
+                ReminderDialog(
+                    onSchedule = { delayMs, message ->
+                        ReminderScheduler.schedule(context, delayMs, message)
+                        showReminderDialog = false
+                    },
+                    onDismiss = { showReminderDialog = false }
                 )
             }
 
@@ -533,6 +600,14 @@ fun ChatScreen(
                             }
                         }
                     }
+
+                    // Quick prompt chips
+                    QuickPromptRow(
+                        onPromptSelected = { prompt ->
+                            inputText = if (inputText.isBlank()) prompt
+                                        else "${inputText.trimEnd()}\n$prompt"
+                        }
+                    )
 
                     // Document pill — visible when a document is loaded
                     AnimatedVisibility(
@@ -664,6 +739,26 @@ fun ChatScreen(
                                 Icons.Filled.Mic,
                                 contentDescription = "Voice input",
                                 tint = if (modelReady && !isGenerating && !isCompressing && !isSearching) TextSecondary else TextMuted,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        // Clipboard paste button
+                        IconButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()
+                                if (!clip.isNullOrBlank()) {
+                                    inputText = if (inputText.isBlank()) clip
+                                                else "${inputText.trimEnd()} $clip"
+                                }
+                            },
+                            enabled = modelReady && !isCompressing && !isSearching,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.ContentPaste,
+                                contentDescription = "Paste clipboard",
+                                tint = TextMuted,
                                 modifier = Modifier.size(20.dp)
                             )
                         }

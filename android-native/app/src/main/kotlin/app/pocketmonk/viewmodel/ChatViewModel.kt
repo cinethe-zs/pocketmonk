@@ -7,12 +7,16 @@ import app.pocketmonk.model.Conversation
 import app.pocketmonk.model.Message
 import app.pocketmonk.model.MessageRole
 import app.pocketmonk.model.MessageStatus
+import app.pocketmonk.model.Persona
 import app.pocketmonk.repository.ConversationRepository
 import app.pocketmonk.service.DownloadState
 import app.pocketmonk.service.LlmService
 import app.pocketmonk.service.ModelEntry
 import app.pocketmonk.service.ModelManager
+import app.pocketmonk.service.PersonaStore
 import app.pocketmonk.service.WebSearchService
+import com.google.gson.GsonBuilder
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +32,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val llmService = LlmService(application)
     val modelManager = ModelManager(application)
     private val webSearchService = WebSearchService()
+    private val personaStore = PersonaStore(application)
+    private val gson = GsonBuilder().create()
 
     private val _downloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
@@ -65,6 +71,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _modelReady = MutableStateFlow(false)
     val modelReady: StateFlow<Boolean> = _modelReady.asStateFlow()
 
+    private val _personas = MutableStateFlow<List<Persona>>(emptyList())
+    val personas: StateFlow<List<Persona>> = _personas.asStateFlow()
+
+    private val _sharedText = MutableStateFlow<String?>(null)
+    val sharedText: StateFlow<String?> = _sharedText.asStateFlow()
+
     // Streaming text for the currently generating assistant message.
     // Kept separate from _currentConversation so each partial update triggers
     // recomposition regardless of StateFlow equality deduplication.
@@ -98,6 +110,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _conversations.value = repo.loadAll()
         }
+        _personas.value = personaStore.load()
     }
 
     fun initModel(modelPath: String, contextSize: Int = 2048) {
@@ -692,7 +705,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun newConversation(modelPath: String? = null, contextSize: Int? = null, temperature: Float? = null) {
+    fun newConversation(
+        modelPath: String? = null,
+        contextSize: Int? = null,
+        temperature: Float? = null,
+        systemPrompt: String? = null
+    ) {
         clearDocument()
         val path = modelPath ?: currentModelPath ?: return
         val size = contextSize ?: currentContextSize
@@ -705,7 +723,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             title = "New Conversation",
             modelPath = path,
             contextSize = size,
-            temperature = temp
+            temperature = temp,
+            systemPrompt = systemPrompt
         )
         viewModelScope.launch {
             repo.save(conv)
@@ -935,6 +954,54 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repo.save(conv)
             refreshConversationList(conv)
+        }
+    }
+
+    // ── Personas ─────────────────────────────────────────────────────────────
+
+    fun savePersona(name: String, systemPrompt: String) {
+        val updated = _personas.value + Persona(name = name, systemPrompt = systemPrompt)
+        _personas.value = updated
+        personaStore.save(updated)
+    }
+
+    fun deletePersona(id: String) {
+        val updated = _personas.value.filter { it.id != id }
+        _personas.value = updated
+        personaStore.save(updated)
+    }
+
+    // ── Share intent ──────────────────────────────────────────────────────────
+
+    fun setSharedText(text: String) {
+        _sharedText.value = text
+    }
+
+    fun consumeSharedText() {
+        _sharedText.value = null
+    }
+
+    // ── Backup / restore ──────────────────────────────────────────────────────
+
+    fun exportBackup(): String {
+        val type = object : TypeToken<List<Conversation>>() {}.type
+        return gson.toJson(_conversations.value, type)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun importBackup(json: String) {
+        val type = object : TypeToken<List<Conversation>>() {}.type
+        val imported: List<Conversation> = runCatching {
+            (gson.fromJson(json, type) as? List<Conversation>) ?: emptyList()
+        }.getOrDefault(emptyList())
+        if (imported.isEmpty()) return
+        viewModelScope.launch {
+            imported.forEach { conv -> repo.save(conv) }
+            val all = repo.loadAll()
+            _conversations.value = all
+            if (_currentConversation.value == null) {
+                _currentConversation.value = all.firstOrNull()
+            }
         }
     }
 

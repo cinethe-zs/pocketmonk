@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import app.pocketmonk.model.Persona
 import app.pocketmonk.service.ModelManager
 import app.pocketmonk.ui.theme.Accent
 import app.pocketmonk.ui.theme.Background
@@ -51,7 +52,8 @@ fun NewConversationDialog(
     currentModelPath: String?,
     currentContextSize: Int,
     currentTemperature: Float = 1.0f,
-    onConfirm: (modelPath: String, contextSize: Int, temperature: Float) -> Unit,
+    personas: List<Persona> = emptyList(),
+    onConfirm: (modelPath: String, contextSize: Int, temperature: Float, systemPrompt: String?) -> Unit,
     onDismiss: () -> Unit
 ) {
     val localFiles = remember { modelManager.listLocalFiles() }
@@ -61,6 +63,7 @@ fun NewConversationDialog(
     var selectedPath by remember { mutableStateOf(initialPath) }
     var selectedContextSize by remember { mutableIntStateOf(currentContextSize) }
     var selectedTemperature by remember { mutableFloatStateOf(currentTemperature) }
+    var selectedPersonaId by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -74,6 +77,31 @@ fun NewConversationDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+
+                // ── Persona ──────────────────────────────────────────────────
+                if (personas.isNotEmpty()) {
+                    Text("Persona", style = MaterialTheme.typography.labelMedium, color = TextMuted)
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // "None" option
+                        ContextSizeChip(
+                            label = "None",
+                            isSelected = selectedPersonaId == null,
+                            onClick = { selectedPersonaId = null }
+                        )
+                        personas.forEach { persona ->
+                            ContextSizeChip(
+                                label = persona.name,
+                                isSelected = selectedPersonaId == persona.id,
+                                onClick = { selectedPersonaId = persona.id }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
 
                 // ── Model ────────────────────────────────────────────────────
                 Text("Model", style = MaterialTheme.typography.labelMedium, color = TextMuted)
@@ -162,7 +190,10 @@ fun NewConversationDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (selectedPath.isNotBlank()) onConfirm(selectedPath, selectedContextSize, selectedTemperature)
+                    if (selectedPath.isNotBlank()) {
+                        val systemPrompt = personas.find { it.id == selectedPersonaId }?.systemPrompt
+                        onConfirm(selectedPath, selectedContextSize, selectedTemperature, systemPrompt)
+                    }
                 },
                 enabled = selectedPath.isNotBlank()
             ) {
