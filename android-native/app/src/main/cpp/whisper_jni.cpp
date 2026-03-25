@@ -84,7 +84,6 @@ Java_app_pocketmonk_service_WhisperService_nativeTranscribe(
     params.single_segment            = false;
     params.n_threads                 = 8;
     params.no_context                = true;
-    params.speed_up                  = true;
     params.progress_callback         = whisper_progress_cb;
     params.progress_callback_user_data = &cbData;
 
