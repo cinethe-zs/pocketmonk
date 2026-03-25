@@ -78,6 +78,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val documentName: StateFlow<String?> = _documentName.asStateFlow()
     private val _documentContent = MutableStateFlow<String?>(null)
 
+    private val _documentLog = MutableStateFlow<String?>(null)
+    val documentLog: StateFlow<String?> = _documentLog.asStateFlow()
+
     private val _modelReady = MutableStateFlow(false)
     val modelReady: StateFlow<Boolean> = _modelReady.asStateFlow()
 
@@ -730,13 +733,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadDocument(name: String, content: String) {
+        val truncated = content.take(8000)
         _documentName.value = name
-        _documentContent.value = content.take(8000)
+        _documentContent.value = truncated
+        _documentLog.value = truncated
     }
 
     fun clearDocument() {
         _documentName.value = null
         _documentContent.value = null
+        _documentLog.value = null
     }
 
     fun loadDocumentFromUri(uri: android.net.Uri) {

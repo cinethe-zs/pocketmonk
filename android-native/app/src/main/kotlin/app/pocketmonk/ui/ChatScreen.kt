@@ -71,6 +71,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -108,6 +110,7 @@ fun ChatScreen(
     val searchStatus by viewModel.searchStatus.collectAsState()
     val searchLog by viewModel.searchLog.collectAsState()
     val isTranscribing by viewModel.isTranscribing.collectAsState()
+    val documentLog by viewModel.documentLog.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val modelReady by viewModel.modelReady.collectAsState()
     val streamingText by viewModel.streamingText.collectAsState()
@@ -166,6 +169,26 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val messages = currentConversation?.messages ?: emptyList()
     val showScrollToBottom by remember { derivedStateOf { listState.canScrollForward } }
+
+    // ── Stuck-to-bottom ───────────────────────────────────────────────────────
+    // True while we should auto-scroll on new content; flips to false the moment
+    // the user scrolls up even slightly, and back to true when they reach the bottom.
+    var stuckToBottom by remember { mutableStateOf(true) }
+    // Prevents user-scroll detection from triggering during programmatic scrolls.
+    var isAutoScrolling by remember { mutableStateOf(false) }
+
+    // Disengage when user scrolls while content is below the viewport.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .collect { scrolling ->
+                if (scrolling && !isAutoScrolling && listState.canScrollForward) {
+                    stuckToBottom = false
+                }
+            }
+    }
+    // Re-engage when the viewport reaches the very bottom.
+    val isAtBottom by remember { derivedStateOf { !listState.canScrollForward } }
+    LaunchedEffect(isAtBottom) { if (isAtBottom) stuckToBottom = true }
 
     val modelName = remember(currentConversation?.modelPath) {
         val path = currentConversation?.modelPath ?: return@remember ""
@@ -242,18 +265,34 @@ fun ChatScreen(
         viewModel.handleSharedFile(uri)
     }
 
-    // Auto-scroll to bottom on new messages
+    // Auto-scroll: new message added (smooth animation).
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
+        if (stuckToBottom && messages.isNotEmpty()) {
+            isAutoScrolling = true
             listState.animateScrollToItem(messages.size)
+            isAutoScrolling = false
         }
     }
 
-    // Also scroll when streaming content updates (last message changes)
+    // Auto-scroll: streaming token or document log appeared (instant — avoids animation stutter).
     val lastMsgContent = messages.lastOrNull()?.content
-    LaunchedEffect(lastMsgContent) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size)
+    LaunchedEffect(lastMsgContent, documentLog) {
+        if (stuckToBottom && messages.isNotEmpty()) {
+            isAutoScrolling = true
+            listState.scrollToItem(messages.size)
+            isAutoScrolling = false
+        }
+    }
+
+    // Lifted so ChatScreen can trigger a scroll when the card is expanded.
+    var documentLogExpanded by remember(documentLog) { mutableStateOf(false) }
+    LaunchedEffect(documentLogExpanded) {
+        if (documentLogExpanded && stuckToBottom) {
+            kotlinx.coroutines.delay(50) // let layout settle after expansion
+            isAutoScrolling = true
+            val last = listState.layoutInfo.totalItemsCount - 1
+            if (last >= 0) listState.animateScrollToItem(last)
+            isAutoScrolling = false
         }
     }
 
@@ -414,6 +453,17 @@ fun ChatScreen(
                             )
                         }
                     }
+                    if (documentLog != null) {
+                        item(key = "document_log") {
+                            DocumentLogCard(
+                                name = documentName ?: "document",
+                                content = documentLog!!,
+                                expanded = documentLogExpanded,
+                                onExpandToggle = { documentLogExpanded = !documentLogExpanded },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
                     if (isSearching && searchLog != null) {
                         item(key = "live_search_log") {
                             LiveSearchLogCard(
@@ -432,7 +482,16 @@ fun ChatScreen(
                             .padding(8.dp)
                     ) {
                         IconButton(
-                            onClick = { scope.launch { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size) } },
+                            onClick = {
+                                scope.launch {
+                                    if (messages.isNotEmpty()) {
+                                        stuckToBottom = true
+                                        isAutoScrolling = true
+                                        listState.animateScrollToItem(messages.size)
+                                        isAutoScrolling = false
+                                    }
+                                }
+                            },
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(RoundedCornerShape(50))
@@ -861,6 +920,68 @@ private fun DocumentDialog(
         },
         containerColor = SurfaceRaised
     )
+}
+
+@Composable
+private fun DocumentLogCard(
+    name: String,
+    content: String,
+    expanded: Boolean,
+    onExpandToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF0D1117))
+            .border(1.dp, Color(0xFF30363D), RoundedCornerShape(8.dp))
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onExpandToggle() }
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                Icons.Filled.AttachFile,
+                contentDescription = null,
+                tint = Color(0xFF58A6FF),
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                name,
+                color = Color(0xFF58A6FF),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "${content.length} chars",
+                color = Color(0xFF8B949E),
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = Color(0xFF8B949E),
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        if (expanded) {
+            Text(
+                text = content,
+                color = Color(0xFFE6EDF3),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+            )
+        }
+    }
 }
 
 @Composable
