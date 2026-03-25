@@ -176,33 +176,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             !it.isSummary && !it.isArchived &&
             it.status != MessageStatus.STREAMING && it.status != MessageStatus.ERROR
         }
-        // Inject document context immediately before the last user message so
-        // formatPrompt merges them into a single user turn (same as web search).
-        val historyForPrompt: List<Message> = run {
-            val docContent = _documentContent.value
-            val docName = _documentName.value
-            if (docContent != null && docName != null) {
-                val lastUserIdx = baseHistory.indexOfLast {
-                    it.role == MessageRole.USER && !it.isSearchLog
-                }
-                if (lastUserIdx >= 0) {
-                    buildList {
-                        addAll(baseHistory.take(lastUserIdx))
-                        add(Message(
-                            role = MessageRole.USER,
-                            content = "[Document: \"$docName\"]\n\n$docContent",
-                            isSearchResult = true
-                        ))
-                        addAll(baseHistory.drop(lastUserIdx))
-                    }
-                } else baseHistory
-            } else baseHistory
-        }
 
         llmService.chat(
-            history = historyForPrompt,
+            history = baseHistory,
             systemPrompt = conv.systemPrompt,
             contextSummary = contextSummary,
+            documentName = _documentName.value,
+            documentContent = _documentContent.value,
             temperature = conv.temperature,
             onPartial = { partial ->
                 viewModelScope.launch(Dispatchers.Main) {

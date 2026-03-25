@@ -82,6 +82,8 @@ class LlmService(private val context: Context) {
         history: List<Message>,
         systemPrompt: String?,
         contextSummary: String?,
+        documentName: String? = null,
+        documentContent: String? = null,
         temperature: Float = 1.0f,
         onPartial: (String) -> Unit,
         onDone: () -> Unit,
@@ -111,6 +113,9 @@ class LlmService(private val context: Context) {
                     else append("You are PocketMonk, a helpful private AI assistant running entirely on-device.")
                     if (!contextSummary.isNullOrBlank()) {
                         append("\n\n[Summary of earlier conversation: $contextSummary]")
+                    }
+                    if (!documentName.isNullOrBlank() && !documentContent.isNullOrBlank()) {
+                        append("\n\nThe user has attached the following document:\n[Document: \"$documentName\"]\n$documentContent")
                     }
                 }
                 // If the second-to-last message is a search/document result, merge it with the
