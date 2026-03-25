@@ -31,6 +31,9 @@ object DocumentTextExtractor {
     private val IMAGE_EXTS   = setOf(
         "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tiff", "tif"
     )
+    private val VIDEO_EXTS   = setOf(
+        "mp4", "mkv", "avi", "mov", "webm", "3gp", "flv", "ts", "m4v", "wmv"
+    )
 
     private val ZIP_XML_MIMES = setOf(
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -43,6 +46,9 @@ object DocumentTextExtractor {
 
     fun isImage(mimeType: String?, ext: String) =
         mimeType?.startsWith("image/") == true || ext in IMAGE_EXTS
+
+    fun isVideo(mimeType: String?, ext: String) =
+        mimeType?.startsWith("video/") == true || ext in VIDEO_EXTS
 
     /**
      * Extract plain text from a non-image document.
@@ -77,6 +83,48 @@ object DocumentTextExtractor {
         val result = ocrBitmap(bitmap)
         bitmap.recycle()
         return result
+    }
+
+    /**
+     * Sample frames evenly across a video and OCR each one.
+     * Uses MediaMetadataRetriever so the whole file is never loaded into memory.
+     * Caps at 30 min / 20 frames. Skips consecutive duplicate results.
+     */
+    suspend fun extractFromVideo(
+        context: android.content.Context,
+        uri: android.net.Uri
+    ): String {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+
+            val durationMs = retriever
+                .extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: return ""
+
+            val effectiveMs = minOf(durationMs, 30 * 60 * 1000L)   // cap at 30 min
+            val maxFrames   = 20
+            val intervalUs  = maxOf(effectiveMs * 1000L / maxFrames, 1_000_000L) // ≥ 1 s apart
+            val frameCount  = minOf(maxFrames, (effectiveMs * 1000L / intervalUs + 1).toInt())
+
+            val results = mutableListOf<String>()
+            for (i in 0 until frameCount) {
+                val bitmap = retriever.getFrameAtTime(
+                    i * intervalUs,
+                    android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                ) ?: continue
+                val text = ocrBitmap(bitmap)
+                bitmap.recycle()
+                // Drop blanks, very short noise, and consecutive duplicates
+                if (text.length > 5 && text != results.lastOrNull()) {
+                    results.add(text)
+                }
+            }
+
+            return results.joinToString("\n---\n").trim()
+        } finally {
+            retriever.release()
+        }
     }
 
     // --- PDF -------------------------------------------------------------------------

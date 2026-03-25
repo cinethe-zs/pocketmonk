@@ -753,6 +753,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val ext = name.substringAfterLast('.', "").lowercase()
             val mimeType = ctx.contentResolver.getType(uri)
             val isImage = app.pocketmonk.util.DocumentTextExtractor.isImage(mimeType, ext)
+            val isVideo = app.pocketmonk.util.DocumentTextExtractor.isVideo(mimeType, ext)
+
+            // Video: stream frames via MediaMetadataRetriever — no need to load bytes
+            if (isVideo) {
+                val content = try {
+                    app.pocketmonk.util.DocumentTextExtractor.extractFromVideo(ctx, uri)
+                } catch (e: Throwable) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        _errorMessage.value = "Failed to read \"$name\": ${e.message}"
+                    }
+                    return@launch
+                }
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    if (content.isBlank())
+                        _errorMessage.value = "No on-screen text found in \"$name\"."
+                    else
+                        loadDocument(name, content)
+                }
+                return@launch
+            }
 
             // Reject files that would OOM — 20 MB is generous for any text/doc/image content
             val limitBytes = 20 * 1024 * 1024L
