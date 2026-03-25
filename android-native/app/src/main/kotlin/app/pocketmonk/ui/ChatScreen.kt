@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -106,6 +107,7 @@ fun ChatScreen(
     val isSearching by viewModel.isSearching.collectAsState()
     val searchStatus by viewModel.searchStatus.collectAsState()
     val searchLog by viewModel.searchLog.collectAsState()
+    val isTranscribing by viewModel.isTranscribing.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val modelReady by viewModel.modelReady.collectAsState()
     val streamingText by viewModel.streamingText.collectAsState()
@@ -444,6 +446,33 @@ fun ChatScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // Transcription progress banner
+            AnimatedVisibility(
+                visible = isTranscribing,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SurfaceRaised)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        color = Accent,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "Transcribing audio…",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
 

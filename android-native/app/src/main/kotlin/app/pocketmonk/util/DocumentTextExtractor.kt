@@ -34,6 +34,9 @@ object DocumentTextExtractor {
     private val VIDEO_EXTS   = setOf(
         "mp4", "mkv", "avi", "mov", "webm", "3gp", "flv", "ts", "m4v", "wmv"
     )
+    private val AUDIO_EXTS   = setOf(
+        "mp3", "m4a", "aac", "ogg", "flac", "wav", "opus", "wma", "aiff", "aif"
+    )
 
     private val ZIP_XML_MIMES = setOf(
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -49,6 +52,9 @@ object DocumentTextExtractor {
 
     fun isVideo(mimeType: String?, ext: String) =
         mimeType?.startsWith("video/") == true || ext in VIDEO_EXTS
+
+    fun isAudio(mimeType: String?, ext: String) =
+        mimeType?.startsWith("audio/") == true || ext in AUDIO_EXTS
 
     /**
      * Extract plain text from a non-image document.

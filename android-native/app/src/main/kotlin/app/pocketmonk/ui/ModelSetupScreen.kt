@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import app.pocketmonk.PocketMonkApp
 import app.pocketmonk.service.DownloadState
 import app.pocketmonk.service.ModelEntry
+import app.pocketmonk.service.WhisperService
 import app.pocketmonk.ui.theme.*
 import app.pocketmonk.viewmodel.ChatViewModel
 import java.io.File
@@ -38,6 +39,7 @@ fun ModelSetupScreen(
     onModelReady: (String) -> Unit,
 ) {
     val downloadState by viewModel.downloadState.collectAsState()
+    val whisperDownloadState by viewModel.whisperDownloadState.collectAsState()
     val manager = viewModel.modelManager
 
     // Reset Done state so re-opening this screen doesn't instantly navigate away
@@ -287,6 +289,29 @@ fun ModelSetupScreen(
                 }
             }
 
+            // ── Speech Recognition section ───────────────────────────────
+            item {
+                Text(
+                    text = "Speech Recognition",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp, bottom = 6.dp),
+                )
+            }
+            item {
+                WhisperModelCard(
+                    isDownloaded       = viewModel.whisperService.isModelDownloaded(),
+                    downloadState      = whisperDownloadState,
+                    onDownload         = { viewModel.downloadWhisperModel() },
+                    onCancel           = { viewModel.cancelWhisperDownload() },
+                    onDelete           = { viewModel.deleteWhisperModel() },
+                    onDismissError     = { viewModel.dismissWhisperDownloadError() },
+                )
+            }
+
             item { Spacer(Modifier.height(32.dp)) }
         }
     }
@@ -502,6 +527,176 @@ private fun LocalFileCard(file: File, onUse: () -> Unit, onDelete: () -> Unit) {
             colors = ButtonDefaults.textButtonColors(contentColor = Accent),
         ) {
             Text("Use", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+// ── Whisper model card ─────────────────────────────────────────────────────────
+
+@Composable
+private fun WhisperModelCard(
+    isDownloaded: Boolean,
+    downloadState: DownloadState,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+    onDismissError: () -> Unit,
+) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Whisper model?", color = TextPrimary) },
+            text = {
+                Text(
+                    "${WhisperService.MODEL_FILENAME} will be removed from the device.",
+                    color = TextMuted, fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showDeleteConfirm = false; onDelete() }) {
+                    Text("Delete", color = Error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = Surface,
+        )
+    }
+
+    val isDownloading = downloadState is DownloadState.Downloading
+    val progress = if (isDownloading) (downloadState as DownloadState.Downloading).progress else 0f
+    val isError = downloadState is DownloadState.Error
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface)
+            .border(
+                1.dp,
+                if (isDownloaded) Success.copy(alpha = 0.4f) else Border,
+                RoundedCornerShape(12.dp)
+            )
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Whisper Base (Q5)",
+                    color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "On-device speech recognition — EN, FR, ES, DE, RU, ZH and more.",
+                    color = TextMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp),
+                    lineHeight = 16.sp,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("~57 MB", color = TextMuted, fontSize = 11.sp)
+        }
+
+        if (isError) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Error.copy(alpha = 0.12f))
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.ErrorOutline, null, tint = Error, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    (downloadState as DownloadState.Error).message,
+                    color = Error, fontSize = 11.sp, modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onDismissError, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Rounded.Close, null, tint = Error, modifier = Modifier.size(14.dp))
+                }
+            }
+        }
+
+        AnimatedVisibility(visible = isDownloading) {
+            Column(modifier = Modifier.padding(top = 10.dp)) {
+                if (progress >= 0f) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                        color = Accent, trackColor = Border,
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
+                        color = Accent, trackColor = Border,
+                    )
+                }
+                Text(
+                    text = if (progress < 0f) "Connecting…" else "${"%.0f".format(progress * 100)}%",
+                    color = TextMuted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+            when {
+                isDownloading -> OutlinedButton(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
+                    border = ButtonDefaults.outlinedButtonBorder.copy(
+                        brush = SolidColor(Error.copy(alpha = 0.5f))
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                ) {
+                    Text("Cancel", fontSize = 12.sp)
+                }
+
+                isDownloaded -> {
+                    IconButton(onClick = { showDeleteConfirm = true }, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Rounded.DeleteOutline, contentDescription = "Delete",
+                            tint = Error, modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Success.copy(alpha = 0.15f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.CheckCircle, null, tint = Success, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Ready", color = Success, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                else -> Button(
+                    onClick = onDownload,
+                    enabled = !isDownloading,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Accent,
+                        disabledContainerColor = Border,
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Rounded.Download, null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Download", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }
