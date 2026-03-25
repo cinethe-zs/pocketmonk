@@ -5,7 +5,7 @@
 
 ---
 
-## Status: v1.0.0 released
+## Status: v3.22.0 released
 
 The app is fully functional as a private on-device chat assistant.
 
@@ -119,6 +119,9 @@ Visible in Android Files app under: `Android/data/app.pocketmonk/files/models/`
 | Linker: unable to find `-lcpp-httplib` | Added `add_subdirectory` for cpp-httplib in android build.gradle |
 | Bartowski renamed repos with company prefix | Updated URLs: `google_gemma-3-4b-it-GGUF`, `microsoft_Phi-4-mini-instruct-GGUF` |
 | Small models output raw JSON tool calls | **Removed all tool/function-calling** in v1.0 — plain chat only |
+| vulkan-shaders-gen deadlock on Windows | Windows `CreateProcess(bInheritHandles=TRUE)` + N=16 concurrent glslc → pipes never close. Fix: N=1 sequential + no early-return before compile_count-- |
+| GL_KHR_cooperative_matrix not in NDK glslc | NDK 27 glslc doesn't support coopmat; shaders stubbed out (Mali-G710 has no coopmat anyway) |
+| find_package(Vulkan) fails in Android cross-compile | Replaced with custom `ggml-vulkan-android.cmake` that skips find_package and links Android system libvulkan directly |
 
 ---
 
@@ -141,4 +144,4 @@ Candidate approach for a future version: use a larger model (7B+) with proven to
 | v1.0 | Chat QA, model download, conversation persistence ✓ |
 | v1.1 | Voice input — Whisper.cpp STT |
 | v1.2 | Voice output — Piper TTS |
-| v2.0 | GPU inference (Vulkan / NNAPI) |
+| v2.0 | GPU inference (Vulkan / NNAPI) ✓ |
