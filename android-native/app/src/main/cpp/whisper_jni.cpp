@@ -13,9 +13,15 @@ Java_app_pocketmonk_service_WhisperService_nativeLoadModel(
     JNIEnv *env, jclass /*clazz*/, jstring modelPath)
 {
     const char *path = env->GetStringUTFChars(modelPath, nullptr);
+    // Try GPU first; fall back to CPU if Vulkan is unavailable on this device.
     whisper_context_params params = whisper_context_default_params();
-    params.use_gpu = false;
+    params.use_gpu = true;
     whisper_context *ctx = whisper_init_from_file_with_params(path, params);
+    if (ctx == nullptr) {
+        LOGE("GPU init failed, retrying with CPU");
+        params.use_gpu = false;
+        ctx = whisper_init_from_file_with_params(path, params);
+    }
     env->ReleaseStringUTFChars(modelPath, path);
     if (ctx == nullptr) {
         LOGE("Failed to load whisper model");
