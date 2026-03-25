@@ -18,6 +18,7 @@ import kotlin.coroutines.coroutineContext
 class WhisperService(private val context: Context) {
 
     companion object {
+        // Multilingual models (all languages)
         const val TINY_MODEL_FILENAME = "ggml-tiny-q5_1.bin"
         const val TINY_MODEL_URL =
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin"
@@ -25,6 +26,15 @@ class WhisperService(private val context: Context) {
         const val BASE_MODEL_FILENAME = "ggml-base-q5_1.bin"
         const val BASE_MODEL_URL =
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+
+        // English-only models: smaller vocabulary → faster + more accurate for English
+        const val TINY_EN_MODEL_FILENAME = "ggml-tiny.en-q5_1.bin"
+        const val TINY_EN_MODEL_URL =
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin"
+
+        const val BASE_EN_MODEL_FILENAME = "ggml-base.en-q5_1.bin"
+        const val BASE_EN_MODEL_URL =
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin"
 
         // Legacy alias kept for ViewModel back-compat
         const val MODEL_FILENAME = BASE_MODEL_FILENAME
@@ -69,26 +79,48 @@ class WhisperService(private val context: Context) {
         return dir
     }
 
-    fun tinyModelFile(): File = File(modelsDir(), TINY_MODEL_FILENAME)
-    fun modelFile(): File = File(modelsDir(), BASE_MODEL_FILENAME)  // base = legacy
+    fun tinyModelFile(): File   = File(modelsDir(), TINY_MODEL_FILENAME)
+    fun tinyEnModelFile(): File = File(modelsDir(), TINY_EN_MODEL_FILENAME)
+    fun baseEnModelFile(): File = File(modelsDir(), BASE_EN_MODEL_FILENAME)
+    fun modelFile(): File       = File(modelsDir(), BASE_MODEL_FILENAME)  // base multilingual = legacy
 
-    fun isTinyModelDownloaded(): Boolean = tinyModelFile().let { it.exists() && it.length() > 500_000L }
-    fun isBaseModelDownloaded(): Boolean = modelFile().let { it.exists() && it.length() > 1_000_000L }
+    fun isTinyModelDownloaded():   Boolean = tinyModelFile().let   { it.exists() && it.length() > 500_000L }
+    fun isTinyEnModelDownloaded(): Boolean = tinyEnModelFile().let { it.exists() && it.length() > 500_000L }
+    fun isBaseEnModelDownloaded(): Boolean = baseEnModelFile().let { it.exists() && it.length() > 1_000_000L }
+    fun isBaseModelDownloaded():   Boolean = modelFile().let       { it.exists() && it.length() > 1_000_000L }
 
     /** True if any Whisper model is available for transcription. */
-    fun isModelDownloaded(): Boolean = isTinyModelDownloaded() || isBaseModelDownloaded()
+    fun isModelDownloaded(): Boolean =
+        isTinyModelDownloaded() || isTinyEnModelDownloaded() ||
+        isBaseEnModelDownloaded() || isBaseModelDownloaded()
 
     // ── Model lifecycle ─────────────────────────────────────────────────────
 
-    /** Loads the best available model (tiny preferred). Returns false if none available. */
-    fun loadModel(): Boolean {
-        val target = when {
-            isTinyModelDownloaded() -> tinyModelFile()
-            isBaseModelDownloaded() -> modelFile()
-            else -> return false
-        }
+    /**
+     * Loads the best available model for [language].
+     * [modelPref]: "auto" | "tiny" | "tiny_en" | "base_en" | "base"
+     * When "auto", prefers English-specific models for "en", otherwise multilingual tiny/base.
+     */
+    fun loadModel(language: String = "auto", modelPref: String = "auto"): Boolean {
+        val target = when (modelPref) {
+            "tiny"    -> tinyModelFile().takeIf   { isTinyModelDownloaded() }
+            "tiny_en" -> tinyEnModelFile().takeIf { isTinyEnModelDownloaded() }
+            "base_en" -> baseEnModelFile().takeIf { isBaseEnModelDownloaded() }
+            "base"    -> modelFile().takeIf       { isBaseModelDownloaded() }
+            else -> { // "auto": pick best available for the language
+                val isEnglish = language == "en"
+                when {
+                    isEnglish && isTinyEnModelDownloaded() -> tinyEnModelFile()
+                    isEnglish && isBaseEnModelDownloaded() -> baseEnModelFile()
+                    isTinyModelDownloaded()   -> tinyModelFile()
+                    isTinyEnModelDownloaded() -> tinyEnModelFile()
+                    isBaseModelDownloaded()   -> modelFile()
+                    isBaseEnModelDownloaded() -> baseEnModelFile()
+                    else -> null
+                }
+            }
+        } ?: return false
         if (modelHandle != 0L && loadedModelPath == target.absolutePath) return true
-        // Model changed or not yet loaded — (re)load.
         if (modelHandle != 0L) { nativeFreeModel(modelHandle); modelHandle = 0L; loadedModelPath = null }
         modelHandle = nativeLoadModel(target.absolutePath)
         if (modelHandle != 0L) loadedModelPath = target.absolutePath
@@ -136,26 +168,33 @@ class WhisperService(private val context: Context) {
 
     /** Downloads the Base Whisper model (~57 MB). Cooperative cancellation. */
     suspend fun downloadModel(onProgress: (Float) -> Unit): File {
-        val f = modelFile()
-        downloadFile(BASE_MODEL_URL, f, onProgress)
-        return f
+        val f = modelFile(); downloadFile(BASE_MODEL_URL, f, onProgress); return f
+    }
+    /** Downloads the Tiny English-only model (~25 MB). */
+    suspend fun downloadTinyEnModel(onProgress: (Float) -> Unit): File {
+        val f = tinyEnModelFile(); downloadFile(TINY_EN_MODEL_URL, f, onProgress); return f
+    }
+    /** Downloads the Base English-only model (~42 MB). */
+    suspend fun downloadBaseEnModel(onProgress: (Float) -> Unit): File {
+        val f = baseEnModelFile(); downloadFile(BASE_EN_MODEL_URL, f, onProgress); return f
     }
 
     // ── Transcription ───────────────────────────────────────────────────────
 
     /**
      * Transcribes the audio track of [uri].
-     * Returns the transcript string, or empty string if no speech was found or model unavailable.
-     * Pass [language] as a two-letter BCP-47 code (e.g. "en", "fr") or "auto" for auto-detect.
+     * [language]: two-letter BCP-47 code ("en", "fr", …) or "auto" for auto-detect.
+     * [modelPref]: "auto" | "tiny" | "tiny_en" | "base_en" | "base"
      */
     suspend fun transcribeUri(
         uri: Uri,
         language: String = "auto",
+        modelPref: String = "auto",
         onProgress: (Float) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val samples = decodeAudio(uri) ?: return@withContext ""
         if (samples.isEmpty()) return@withContext ""
-        if (!loadModel()) return@withContext ""
+        if (!loadModel(language, modelPref)) return@withContext ""
         nativeTranscribe(modelHandle, samples, language) { percent ->
             onProgress(percent / 100f)
         }

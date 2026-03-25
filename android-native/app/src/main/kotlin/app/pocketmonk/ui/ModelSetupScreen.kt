@@ -3,6 +3,7 @@ package app.pocketmonk.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import app.pocketmonk.PocketMonkApp
 import app.pocketmonk.service.DownloadState
 import app.pocketmonk.service.ModelEntry
@@ -33,14 +35,44 @@ import app.pocketmonk.ui.theme.*
 import app.pocketmonk.viewmodel.ChatViewModel
 import java.io.File
 
+private val WHISPER_LANGUAGES = listOf(
+    "auto" to "Auto-detect",
+    "en"   to "English",
+    "fr"   to "French",
+    "es"   to "Spanish",
+    "de"   to "German",
+    "it"   to "Italian",
+    "pt"   to "Portuguese",
+    "nl"   to "Dutch",
+    "pl"   to "Polish",
+    "ru"   to "Russian",
+    "uk"   to "Ukrainian",
+    "ar"   to "Arabic",
+    "zh"   to "Chinese",
+    "ja"   to "Japanese",
+    "ko"   to "Korean",
+)
+
+private val WHISPER_MODEL_PREFS = listOf(
+    "auto"    to "Auto",
+    "tiny"    to "Tiny",
+    "tiny_en" to "Tiny EN",
+    "base_en" to "Base EN",
+    "base"    to "Base",
+)
+
 @Composable
 fun ModelSetupScreen(
     viewModel: ChatViewModel,
     onModelReady: (String) -> Unit,
 ) {
     val downloadState by viewModel.downloadState.collectAsState()
-    val whisperTinyDownloadState by viewModel.whisperTinyDownloadState.collectAsState()
-    val whisperDownloadState by viewModel.whisperDownloadState.collectAsState()
+    val whisperTinyDownloadState   by viewModel.whisperTinyDownloadState.collectAsState()
+    val whisperTinyEnDownloadState by viewModel.whisperTinyEnDownloadState.collectAsState()
+    val whisperBaseEnDownloadState by viewModel.whisperBaseEnDownloadState.collectAsState()
+    val whisperDownloadState       by viewModel.whisperDownloadState.collectAsState()
+    val whisperLanguage   by viewModel.whisperLanguage.collectAsState()
+    val whisperModelPref  by viewModel.whisperModelPref.collectAsState()
     val manager = viewModel.modelManager
 
     // Reset Done state so re-opening this screen doesn't instantly navigate away
@@ -318,6 +350,34 @@ fun ModelSetupScreen(
             item {
                 Spacer(Modifier.height(6.dp))
                 WhisperModelCard(
+                    modelName      = "Whisper Tiny EN (Q5) — English fast",
+                    modelDesc      = "English-only. Smaller vocab → faster + more accurate for English audio.",
+                    modelSize      = "~25 MB",
+                    isDownloaded   = viewModel.whisperService.isTinyEnModelDownloaded(),
+                    downloadState  = whisperTinyEnDownloadState,
+                    onDownload     = { viewModel.downloadWhisperTinyEnModel() },
+                    onCancel       = { viewModel.cancelWhisperTinyEnDownload() },
+                    onDelete       = { viewModel.deleteWhisperTinyEnModel() },
+                    onDismissError = { viewModel.dismissWhisperTinyEnDownloadError() },
+                )
+            }
+            item {
+                Spacer(Modifier.height(6.dp))
+                WhisperModelCard(
+                    modelName      = "Whisper Base EN (Q5) — English quality",
+                    modelDesc      = "English-only. Best accuracy for English at moderate speed.",
+                    modelSize      = "~42 MB",
+                    isDownloaded   = viewModel.whisperService.isBaseEnModelDownloaded(),
+                    downloadState  = whisperBaseEnDownloadState,
+                    onDownload     = { viewModel.downloadWhisperBaseEnModel() },
+                    onCancel       = { viewModel.cancelWhisperBaseEnDownload() },
+                    onDelete       = { viewModel.deleteWhisperBaseEnModel() },
+                    onDismissError = { viewModel.dismissWhisperBaseEnDownloadError() },
+                )
+            }
+            item {
+                Spacer(Modifier.height(6.dp))
+                WhisperModelCard(
                     modelName      = "Whisper Base (Q5) — Quality",
                     modelDesc      = "More accurate but ~4× slower than Tiny.",
                     modelSize      = "~57 MB",
@@ -328,6 +388,23 @@ fun ModelSetupScreen(
                     onDelete       = { viewModel.deleteWhisperModel() },
                     onDismissError = { viewModel.dismissWhisperDownloadError() },
                 )
+            }
+
+            // ── Transcription preferences ─────────────────────────────────
+            if (viewModel.whisperService.isModelDownloaded()) {
+                item {
+                    Spacer(Modifier.height(12.dp))
+                    WhisperPrefsCard(
+                        language     = whisperLanguage,
+                        modelPref    = whisperModelPref,
+                        hasTiny      = viewModel.whisperService.isTinyModelDownloaded(),
+                        hasTinyEn    = viewModel.whisperService.isTinyEnModelDownloaded(),
+                        hasBaseEn    = viewModel.whisperService.isBaseEnModelDownloaded(),
+                        hasBase      = viewModel.whisperService.isBaseModelDownloaded(),
+                        onLanguage   = { viewModel.setWhisperLanguage(it) },
+                        onModelPref  = { viewModel.setWhisperModelPref(it) },
+                    )
+                }
             }
 
             item { Spacer(Modifier.height(32.dp)) }
@@ -716,6 +793,125 @@ private fun WhisperModelCard(
                     Icon(Icons.Rounded.Download, null, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Download", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+// ── Whisper preferences card ───────────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WhisperPrefsCard(
+    language: String,
+    modelPref: String,
+    hasTiny: Boolean,
+    hasTinyEn: Boolean,
+    hasBaseEn: Boolean,
+    hasBase: Boolean,
+    onLanguage: (String) -> Unit,
+    onModelPref: (String) -> Unit,
+) {
+    val downloadedModels = buildList {
+        add("auto" to "Auto")
+        if (hasTiny)   add("tiny"    to "Tiny")
+        if (hasTinyEn) add("tiny_en" to "Tiny EN")
+        if (hasBaseEn) add("base_en" to "Base EN")
+        if (hasBase)   add("base"    to "Base")
+    }
+    val showModelPref = downloadedModels.size > 2  // more than Auto + one model
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface)
+            .border(1.dp, Border, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Transcription settings", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+
+        // Language picker
+        var langExpanded by remember { mutableStateOf(false) }
+        val langLabel = WHISPER_LANGUAGES.firstOrNull { it.first == language }?.second ?: "Auto-detect"
+        Column {
+            Text("Language", color = TextMuted, fontSize = 11.sp)
+            Spacer(Modifier.height(4.dp))
+            ExposedDropdownMenuBox(expanded = langExpanded, onExpandedChange = { langExpanded = it }) {
+                OutlinedTextField(
+                    value = langLabel,
+                    onValueChange = {},
+                    readOnly = true,
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = langExpanded) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Accent,
+                        unfocusedBorderColor = Border,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedContainerColor = Background,
+                        unfocusedContainerColor = Background,
+                        focusedTrailingIconColor = TextMuted,
+                        unfocusedTrailingIconColor = TextMuted,
+                    ),
+                    textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
+                    singleLine = true,
+                )
+                ExposedDropdownMenu(
+                    expanded = langExpanded,
+                    onDismissRequest = { langExpanded = false },
+                    modifier = Modifier.background(Surface),
+                ) {
+                    WHISPER_LANGUAGES.forEach { (code, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label, color = TextPrimary, fontSize = 13.sp) },
+                            onClick = { onLanguage(code); langExpanded = false },
+                            modifier = if (code == language)
+                                Modifier.background(Accent.copy(alpha = 0.12f)) else Modifier,
+                        )
+                    }
+                }
+            }
+            if (language != "auto") {
+                Text(
+                    "Skips language detection — faster and more accurate for $langLabel.",
+                    color = TextMuted, fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 3.dp),
+                )
+            }
+        }
+
+        // Model preference (only when multiple models available)
+        if (showModelPref) {
+            Column {
+                Text("Preferred model", color = TextMuted, fontSize = 11.sp)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    downloadedModels.forEach { (pref, label) ->
+                        val selected = modelPref == pref
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (selected) Accent else Surface)
+                                .border(1.dp, if (selected) Accent else Border, RoundedCornerShape(8.dp))
+                                .clickable { onModelPref(pref) }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        ) {
+                            Text(label, color = if (selected) Background else TextPrimary, fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                        }
+                    }
+                }
+                if (language == "en" && (hasTinyEn || hasBaseEn)) {
+                    Text(
+                        "English-only models (EN) are recommended when language is set to English.",
+                        color = TextMuted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp),
+                        lineHeight = 15.sp,
+                    )
                 }
             }
         }

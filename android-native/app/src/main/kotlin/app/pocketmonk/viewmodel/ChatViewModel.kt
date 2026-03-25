@@ -42,10 +42,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var downloadJob: Job? = null
 
+    private val whisperPrefs =
+        application.getSharedPreferences("whisper_prefs", android.content.Context.MODE_PRIVATE)
+
+    private val _whisperLanguage = MutableStateFlow(
+        whisperPrefs.getString("language", "auto") ?: "auto"
+    )
+    val whisperLanguage: StateFlow<String> = _whisperLanguage.asStateFlow()
+
+    private val _whisperModelPref = MutableStateFlow(
+        whisperPrefs.getString("model_pref", "auto") ?: "auto"
+    )
+    val whisperModelPref: StateFlow<String> = _whisperModelPref.asStateFlow()
+
+    fun setWhisperLanguage(lang: String) {
+        _whisperLanguage.value = lang
+        whisperPrefs.edit().putString("language", lang).apply()
+    }
+
+    fun setWhisperModelPref(pref: String) {
+        _whisperModelPref.value = pref
+        whisperPrefs.edit().putString("model_pref", pref).apply()
+    }
+
     private val _whisperTinyDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val whisperTinyDownloadState: StateFlow<DownloadState> = _whisperTinyDownloadState.asStateFlow()
-
     private var whisperTinyDownloadJob: Job? = null
+
+    private val _whisperTinyEnDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val whisperTinyEnDownloadState: StateFlow<DownloadState> = _whisperTinyEnDownloadState.asStateFlow()
+    private var whisperTinyEnDownloadJob: Job? = null
+
+    private val _whisperBaseEnDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val whisperBaseEnDownloadState: StateFlow<DownloadState> = _whisperBaseEnDownloadState.asStateFlow()
+    private var whisperBaseEnDownloadJob: Job? = null
 
     private val _whisperDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val whisperDownloadState: StateFlow<DownloadState> = _whisperDownloadState.asStateFlow()
@@ -806,7 +836,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _transcriptionProgress.value = 0f
                 }
                 val transcript = try {
-                    whisperService.transcribeUri(uri) { progress ->
+                    whisperService.transcribeUri(uri, _whisperLanguage.value, _whisperModelPref.value) { progress ->
                         viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
                             _transcriptionProgress.value = progress
                         }
@@ -852,7 +882,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _transcriptionProgress.value = 0f
                     }
                     try {
-                        whisperService.transcribeUri(uri) { progress ->
+                        whisperService.transcribeUri(uri, _whisperLanguage.value, _whisperModelPref.value) { progress ->
                             viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
                                 _transcriptionProgress.value = progress
                             }
@@ -1132,6 +1162,54 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         whisperService.releaseModel()
         whisperService.modelFile().delete()
         _whisperDownloadState.value = DownloadState.Idle
+    }
+
+    fun downloadWhisperTinyEnModel() {
+        if (_whisperTinyEnDownloadState.value is DownloadState.Downloading) return
+        whisperTinyEnDownloadJob = viewModelScope.launch {
+            _whisperTinyEnDownloadState.value = DownloadState.Downloading("whisper-tiny-en", 0f)
+            try {
+                val file = whisperService.downloadTinyEnModel { p ->
+                    _whisperTinyEnDownloadState.value = DownloadState.Downloading("whisper-tiny-en", p)
+                }
+                _whisperTinyEnDownloadState.value = DownloadState.Done(file.absolutePath)
+            } catch (e: Exception) {
+                _whisperTinyEnDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
+            }
+        }
+    }
+    fun cancelWhisperTinyEnDownload() {
+        whisperTinyEnDownloadJob?.cancel(); whisperTinyEnDownloadJob = null
+        _whisperTinyEnDownloadState.value = DownloadState.Idle
+    }
+    fun dismissWhisperTinyEnDownloadError() { _whisperTinyEnDownloadState.value = DownloadState.Idle }
+    fun deleteWhisperTinyEnModel() {
+        whisperService.releaseModel(); whisperService.tinyEnModelFile().delete()
+        _whisperTinyEnDownloadState.value = DownloadState.Idle
+    }
+
+    fun downloadWhisperBaseEnModel() {
+        if (_whisperBaseEnDownloadState.value is DownloadState.Downloading) return
+        whisperBaseEnDownloadJob = viewModelScope.launch {
+            _whisperBaseEnDownloadState.value = DownloadState.Downloading("whisper-base-en", 0f)
+            try {
+                val file = whisperService.downloadBaseEnModel { p ->
+                    _whisperBaseEnDownloadState.value = DownloadState.Downloading("whisper-base-en", p)
+                }
+                _whisperBaseEnDownloadState.value = DownloadState.Done(file.absolutePath)
+            } catch (e: Exception) {
+                _whisperBaseEnDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
+            }
+        }
+    }
+    fun cancelWhisperBaseEnDownload() {
+        whisperBaseEnDownloadJob?.cancel(); whisperBaseEnDownloadJob = null
+        _whisperBaseEnDownloadState.value = DownloadState.Idle
+    }
+    fun dismissWhisperBaseEnDownloadError() { _whisperBaseEnDownloadState.value = DownloadState.Idle }
+    fun deleteWhisperBaseEnModel() {
+        whisperService.releaseModel(); whisperService.baseEnModelFile().delete()
+        _whisperBaseEnDownloadState.value = DownloadState.Idle
     }
 
     fun useLocalModel(path: String) {
