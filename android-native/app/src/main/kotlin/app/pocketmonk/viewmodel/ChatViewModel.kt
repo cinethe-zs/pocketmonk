@@ -827,7 +827,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun handleSharedFile(uri: android.net.Uri) {
-        newConversation()
+        newConversation(contextSize = 4096)
         loadDocumentFromUri(uri)
     }
 
