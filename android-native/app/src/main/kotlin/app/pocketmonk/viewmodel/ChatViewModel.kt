@@ -732,18 +732,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun loadDocumentFromUri(uri: android.net.Uri) {
         val ctx = getApplication<android.app.Application>()
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val name = try {
+            // Query name and size in one pass
+            var name = "document"
+            var fileSize = 0L
+            try {
                 ctx.contentResolver.query(
-                    uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                    uri,
+                    arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE),
                     null, null, null
-                )?.use { if (it.moveToFirst()) it.getString(0) else null }
-            } catch (_: Exception) { null } ?: uri.lastPathSegment ?: "document"
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        name = cursor.getString(0) ?: uri.lastPathSegment ?: "document"
+                        fileSize = cursor.getLong(1)
+                    }
+                }
+            } catch (_: Exception) {
+                name = uri.lastPathSegment ?: "document"
+            }
 
+            val ext = name.substringAfterLast('.', "").lowercase()
             val mimeType = ctx.contentResolver.getType(uri)
+            val isImage = app.pocketmonk.util.DocumentTextExtractor.isImage(mimeType, ext)
+
+            // Reject files that would OOM — 20 MB is generous for any text/doc/image content
+            val limitBytes = 20 * 1024 * 1024L
+            if (fileSize > limitBytes) {
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _errorMessage.value = "\"$name\" is too large (${fileSize / 1024 / 1024} MB). Maximum is 20 MB."
+                }
+                return@launch
+            }
 
             val bytes = try {
                 ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                     _errorMessage.value = "Failed to open \"$name\": ${e.message}"
                 }
@@ -755,14 +777,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            val ext = name.substringAfterLast('.', "").lowercase()
-            val isImage = app.pocketmonk.util.DocumentTextExtractor.isImage(mimeType, ext)
-            val content: String? = if (isImage) {
-                app.pocketmonk.util.DocumentTextExtractor.extractFromImage(bytes)
-                    .let { if (it.isBlank()) "" else "Text extracted from image (OCR):\n$it" }
-            } else {
-                app.pocketmonk.util.DocumentTextExtractor.extract(bytes, mimeType, name)
+            val content: String? = try {
+                if (isImage) {
+                    app.pocketmonk.util.DocumentTextExtractor.extractFromImage(bytes)
+                        .let { if (it.isBlank()) "" else "Text extracted from image (OCR):\n$it" }
+                } else {
+                    app.pocketmonk.util.DocumentTextExtractor.extract(bytes, mimeType, name)
+                }
+            } catch (e: Throwable) {
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _errorMessage.value = "Failed to read \"$name\": ${e.message}"
+                }
+                return@launch
             }
+
             withContext(kotlinx.coroutines.Dispatchers.Main) {
                 when {
                     content == null ->
