@@ -6,6 +6,10 @@ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 
 class PocketMonkApp : Application() {
 
+    // Crash message lives in memory only — cleared from SharedPreferences on first read so
+    // a second launch never shows a stale crash again, preventing the "permanently stuck" state.
+    var pendingCrashMessage: String? = null
+
     override fun onCreate() {
         super.onCreate()
 
@@ -37,7 +41,15 @@ class PocketMonkApp : Application() {
                 .edit().remove("active_model_path").commit()
         }
 
-        // Save any unhandled JVM exceptions to prefs so the UI can show them.
+        // Read any saved crash into memory and immediately clear it from SharedPreferences.
+        // This guarantees the crash banner shows at most once — if the app is force-killed or
+        // crashes again before the user taps ✕, the next launch starts clean.
+        pendingCrashMessage = prefs.getString("last_crash", null)
+        if (pendingCrashMessage != null) {
+            prefs.edit().remove("last_crash").apply()
+        }
+
+        // Save any unhandled JVM exceptions to prefs so the next launch can show them.
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             val msg = buildString {
@@ -50,14 +62,11 @@ class PocketMonkApp : Application() {
     }
 
     companion object {
-        fun getLastCrash(context: Context): String? {
-            val prefs = context.getSharedPreferences("crash_log", Context.MODE_PRIVATE)
-            return prefs.getString("last_crash", null)
-        }
+        fun getLastCrash(context: Context): String? =
+            (context.applicationContext as PocketMonkApp).pendingCrashMessage
 
         fun clearLastCrash(context: Context) {
-            context.getSharedPreferences("crash_log", Context.MODE_PRIVATE)
-                .edit().remove("last_crash").apply()
+            (context.applicationContext as PocketMonkApp).pendingCrashMessage = null
         }
     }
 }
