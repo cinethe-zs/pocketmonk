@@ -481,7 +481,7 @@ fun ChatScreen(
                         showDocumentDialog = false
                     },
                     onPickFile = {
-                        filePicker.launch("text/*")
+                        filePicker.launch("*/*")
                         showDocumentDialog = false
                     },
                     onDismiss = { showDocumentDialog = false }

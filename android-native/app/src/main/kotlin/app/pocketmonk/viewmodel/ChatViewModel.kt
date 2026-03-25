@@ -732,27 +732,41 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun loadDocumentFromUri(uri: android.net.Uri) {
         val ctx = getApplication<android.app.Application>()
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val name = try {
+                ctx.contentResolver.query(
+                    uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                    null, null, null
+                )?.use { if (it.moveToFirst()) it.getString(0) else null }
+            } catch (_: Exception) { null } ?: uri.lastPathSegment ?: "document"
+
+            val mimeType = ctx.contentResolver.getType(uri)
+
             val bytes = try {
                 ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            } catch (_: Exception) { null } ?: return@launch
-
-            // Try UTF-8 first; fall back to ISO-8859-1 for Windows-1252/Latin-1 encoded files
-            val content = try {
-                val utf8 = bytes.toString(Charsets.UTF_8)
-                if ('\uFFFD' in utf8) bytes.toString(Charsets.ISO_8859_1) else utf8
-            } catch (_: Exception) {
-                bytes.toString(Charsets.ISO_8859_1)
+            } catch (e: Exception) {
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _errorMessage.value = "Failed to open \"$name\": ${e.message}"
+                }
+                return@launch
+            } ?: run {
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _errorMessage.value = "Could not read \"$name\""
+                }
+                return@launch
             }
 
-            val name = ctx.contentResolver.query(
-                uri,
-                arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
-                null, null, null
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            } ?: uri.lastPathSegment ?: "document.txt"
+            val content = app.pocketmonk.util.DocumentTextExtractor.extract(bytes, mimeType, name)
             withContext(kotlinx.coroutines.Dispatchers.Main) {
-                loadDocument(name, content)
+                when {
+                    content == null -> {
+                        val ext = name.substringAfterLast('.', "").lowercase()
+                        _errorMessage.value = ".$ext files are not supported. Save as .pdf or .docx instead."
+                    }
+                    content.isBlank() -> {
+                        _errorMessage.value = "\"$name\" appears to be empty or has no readable text."
+                    }
+                    else -> loadDocument(name, content)
+                }
             }
         }
     }

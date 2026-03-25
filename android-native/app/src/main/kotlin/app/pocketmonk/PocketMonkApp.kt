@@ -2,11 +2,14 @@ package app.pocketmonk
 
 import android.app.Application
 import android.content.Context
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 
 class PocketMonkApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        PDFBoxResourceLoader.init(applicationContext)
 
         val prefs = getSharedPreferences("crash_log", Context.MODE_PRIVATE)
 
