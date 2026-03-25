@@ -84,6 +84,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _documentLog = MutableStateFlow<String?>(null)
     val documentLog: StateFlow<String?> = _documentLog.asStateFlow()
 
+    // Separate logs for video: frame OCR and audio transcript shown as two distinct cards.
+    private val _ocrLog = MutableStateFlow<String?>(null)
+    val ocrLog: StateFlow<String?> = _ocrLog.asStateFlow()
+
+    private val _audioLog = MutableStateFlow<String?>(null)
+    val audioLog: StateFlow<String?> = _audioLog.asStateFlow()
+
     private val _modelReady = MutableStateFlow(false)
     val modelReady: StateFlow<Boolean> = _modelReady.asStateFlow()
 
@@ -740,12 +747,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _documentName.value = name
         _documentContent.value = truncated
         _documentLog.value = truncated
+        _ocrLog.value = null
+        _audioLog.value = null
     }
 
     fun clearDocument() {
         _documentName.value = null
         _documentContent.value = null
         _documentLog.value = null
+        _ocrLog.value = null
+        _audioLog.value = null
     }
 
     fun loadDocumentFromUri(uri: android.net.Uri) {
@@ -806,10 +817,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                     _isTranscribing.value = false
                     _transcriptionProgress.value = 0f
-                    if (transcript.isBlank())
+                    if (transcript.isBlank()) {
                         _errorMessage.value = "No speech detected in \"$name\"."
-                    else
-                        loadDocument(name, "Audio transcript:\n$transcript")
+                    } else {
+                        val truncated = transcript.take(8000)
+                        _documentName.value = name
+                        _documentContent.value = "Audio transcript:\n$truncated"
+                        _documentLog.value = null
+                        _ocrLog.value = null
+                        _audioLog.value = truncated
+                    }
                 }
                 return@launch
             }
@@ -856,10 +873,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             append(audioText)
                         }
                     }
-                    if (combined.isBlank())
+                    if (combined.isBlank()) {
                         _errorMessage.value = "No text or speech found in \"$name\"."
-                    else
-                        loadDocument(name, combined)
+                    } else {
+                        _documentName.value = name
+                        _documentContent.value = combined.take(8000)
+                        _documentLog.value = null
+                        _ocrLog.value = ocrText.take(8000).takeIf { it.isNotBlank() }
+                        _audioLog.value = audioText.take(8000).takeIf { it.isNotBlank() }
+                    }
                 }
                 return@launch
             }

@@ -12,8 +12,8 @@ android {
         applicationId = "app.pocketmonk"
         minSdk = 28
         targetSdk = 36
-        versionCode = 79
-        versionName = "3.17.2"
+        versionCode = 80
+        versionName = "3.18.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

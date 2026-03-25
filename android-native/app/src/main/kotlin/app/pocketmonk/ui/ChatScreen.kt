@@ -112,6 +112,8 @@ fun ChatScreen(
     val isTranscribing by viewModel.isTranscribing.collectAsState()
     val transcriptionProgress by viewModel.transcriptionProgress.collectAsState()
     val documentLog by viewModel.documentLog.collectAsState()
+    val ocrLog by viewModel.ocrLog.collectAsState()
+    val audioLog by viewModel.audioLog.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val modelReady by viewModel.modelReady.collectAsState()
     val streamingText by viewModel.streamingText.collectAsState()
@@ -277,7 +279,7 @@ fun ChatScreen(
 
     // Auto-scroll: streaming token or document log appeared (instant — avoids animation stutter).
     val lastMsgContent = messages.lastOrNull()?.content
-    LaunchedEffect(lastMsgContent, documentLog) {
+    LaunchedEffect(lastMsgContent, documentLog, ocrLog, audioLog) {
         if (stuckToBottom && messages.isNotEmpty()) {
             isAutoScrolling = true
             listState.scrollToItem(messages.size)
@@ -287,9 +289,29 @@ fun ChatScreen(
 
     // Lifted so ChatScreen can trigger a scroll when the card is expanded.
     var documentLogExpanded by remember(documentLog) { mutableStateOf(false) }
+    var ocrLogExpanded by remember(ocrLog) { mutableStateOf(false) }
+    var audioLogExpanded by remember(audioLog) { mutableStateOf(false) }
     LaunchedEffect(documentLogExpanded) {
         if (documentLogExpanded && stuckToBottom) {
-            kotlinx.coroutines.delay(50) // let layout settle after expansion
+            kotlinx.coroutines.delay(50)
+            isAutoScrolling = true
+            val last = listState.layoutInfo.totalItemsCount - 1
+            if (last >= 0) listState.animateScrollToItem(last)
+            isAutoScrolling = false
+        }
+    }
+    LaunchedEffect(ocrLogExpanded) {
+        if (ocrLogExpanded && stuckToBottom) {
+            kotlinx.coroutines.delay(50)
+            isAutoScrolling = true
+            val last = listState.layoutInfo.totalItemsCount - 1
+            if (last >= 0) listState.animateScrollToItem(last)
+            isAutoScrolling = false
+        }
+    }
+    LaunchedEffect(audioLogExpanded) {
+        if (audioLogExpanded && stuckToBottom) {
+            kotlinx.coroutines.delay(50)
             isAutoScrolling = true
             val last = listState.layoutInfo.totalItemsCount - 1
             if (last >= 0) listState.animateScrollToItem(last)
@@ -461,6 +483,28 @@ fun ChatScreen(
                                 content = documentLog!!,
                                 expanded = documentLogExpanded,
                                 onExpandToggle = { documentLogExpanded = !documentLogExpanded },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    if (ocrLog != null) {
+                        item(key = "ocr_log") {
+                            DocumentLogCard(
+                                name = "On-screen text (OCR)",
+                                content = ocrLog!!,
+                                expanded = ocrLogExpanded,
+                                onExpandToggle = { ocrLogExpanded = !ocrLogExpanded },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    if (audioLog != null) {
+                        item(key = "audio_log") {
+                            DocumentLogCard(
+                                name = "Audio transcript",
+                                content = audioLog!!,
+                                expanded = audioLogExpanded,
+                                onExpandToggle = { audioLogExpanded = !audioLogExpanded },
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
