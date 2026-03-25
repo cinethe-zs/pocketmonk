@@ -50,6 +50,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _isTranscribing = MutableStateFlow(false)
     val isTranscribing: StateFlow<Boolean> = _isTranscribing.asStateFlow()
 
+    private val _transcriptionProgress = MutableStateFlow(0f)
+    val transcriptionProgress: StateFlow<Float> = _transcriptionProgress.asStateFlow()
+
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
 
@@ -782,18 +785,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     return@launch
                 }
-                withContext(kotlinx.coroutines.Dispatchers.Main) { _isTranscribing.value = true }
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _isTranscribing.value = true
+                    _transcriptionProgress.value = 0f
+                }
                 val transcript = try {
-                    whisperService.transcribeUri(uri)
+                    whisperService.transcribeUri(uri) { progress ->
+                        viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                            _transcriptionProgress.value = progress
+                        }
+                    }
                 } catch (e: Throwable) {
                     withContext(kotlinx.coroutines.Dispatchers.Main) {
                         _isTranscribing.value = false
+                        _transcriptionProgress.value = 0f
                         _errorMessage.value = "Failed to transcribe \"$name\": ${e.message}"
                     }
                     return@launch
                 }
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                     _isTranscribing.value = false
+                    _transcriptionProgress.value = 0f
                     if (transcript.isBlank())
                         _errorMessage.value = "No speech detected in \"$name\"."
                     else
@@ -813,13 +825,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
                 val audioText = if (whisperService.isModelDownloaded()) {
-                    withContext(kotlinx.coroutines.Dispatchers.Main) { _isTranscribing.value = true }
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        _isTranscribing.value = true
+                        _transcriptionProgress.value = 0f
+                    }
                     try {
-                        whisperService.transcribeUri(uri)
+                        whisperService.transcribeUri(uri) { progress ->
+                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                _transcriptionProgress.value = progress
+                            }
+                        }
                     } catch (_: Throwable) {
                         ""
                     }.also {
-                        withContext(kotlinx.coroutines.Dispatchers.Main) { _isTranscribing.value = false }
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            _isTranscribing.value = false
+                            _transcriptionProgress.value = 0f
+                        }
                     }
                 } else ""
                 withContext(kotlinx.coroutines.Dispatchers.Main) {

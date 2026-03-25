@@ -110,6 +110,7 @@ fun ChatScreen(
     val searchStatus by viewModel.searchStatus.collectAsState()
     val searchLog by viewModel.searchLog.collectAsState()
     val isTranscribing by viewModel.isTranscribing.collectAsState()
+    val transcriptionProgress by viewModel.transcriptionProgress.collectAsState()
     val documentLog by viewModel.documentLog.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val modelReady by viewModel.modelReady.collectAsState()
@@ -514,23 +515,34 @@ fun ChatScreen(
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(SurfaceRaised)
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(14.dp),
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Transcribing audio…",
+                            color = TextSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            "${(transcriptionProgress * 100).toInt()}%",
+                            color = Accent,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { transcriptionProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(2.dp)),
                         color = Accent,
-                        strokeWidth = 2.dp,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        "Transcribing audio…",
-                        color = TextSecondary,
-                        style = MaterialTheme.typography.bodySmall,
+                        trackColor = Border,
                     )
                 }
             }

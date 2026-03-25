@@ -27,6 +27,11 @@ class WhisperService(private val context: Context) {
         private const val MAX_AUDIO_SEC = 10 * 60
         private const val WHISPER_SAMPLE_RATE = 16_000
 
+        /** Called from C++ with values 0–100 during whisper_full. */
+        fun interface ProgressCallback {
+            fun onProgress(percent: Int)
+        }
+
         init {
             System.loadLibrary("whisper_jni")
         }
@@ -34,7 +39,8 @@ class WhisperService(private val context: Context) {
         @JvmStatic external fun nativeLoadModel(modelPath: String): Long
         @JvmStatic external fun nativeFreeModel(handle: Long)
         @JvmStatic external fun nativeTranscribe(
-            handle: Long, samples: FloatArray, language: String
+            handle: Long, samples: FloatArray, language: String,
+            progressCallback: ProgressCallback,
         ): String
     }
 
@@ -123,13 +129,18 @@ class WhisperService(private val context: Context) {
      * Returns the transcript string, or empty string if no speech was found or model unavailable.
      * Pass [language] as a two-letter BCP-47 code (e.g. "en", "fr") or "auto" for auto-detect.
      */
-    suspend fun transcribeUri(uri: Uri, language: String = "auto"): String =
-        withContext(Dispatchers.IO) {
-            val samples = decodeAudio(uri) ?: return@withContext ""
-            if (samples.isEmpty()) return@withContext ""
-            if (!loadModel()) return@withContext ""
-            nativeTranscribe(modelHandle, samples, language)
+    suspend fun transcribeUri(
+        uri: Uri,
+        language: String = "auto",
+        onProgress: (Float) -> Unit = {},
+    ): String = withContext(Dispatchers.IO) {
+        val samples = decodeAudio(uri) ?: return@withContext ""
+        if (samples.isEmpty()) return@withContext ""
+        if (!loadModel()) return@withContext ""
+        nativeTranscribe(modelHandle, samples, language) { percent ->
+            onProgress(percent / 100f)
         }
+    }
 
     // ── Audio decoding ──────────────────────────────────────────────────────
 

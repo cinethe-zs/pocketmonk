@@ -34,26 +34,58 @@ Java_app_pocketmonk_service_WhisperService_nativeFreeModel(
     }
 }
 
+// ── Progress callback ────────────────────────────────────────────────────────
+
+struct ProgressCbData {
+    JNIEnv   *env;
+    jobject   callbackObj;
+    jmethodID onProgressMethod;
+};
+
+static void whisper_progress_cb(
+    struct whisper_context * /*ctx*/,
+    struct whisper_state   * /*state*/,
+    int progress,
+    void *user_data)
+{
+    auto *data = static_cast<ProgressCbData *>(user_data);
+    // whisper_full is synchronous and called on the JNI thread, so env is valid.
+    data->env->CallVoidMethod(
+        data->callbackObj,
+        data->onProgressMethod,
+        static_cast<jint>(progress));
+}
+
+// ── Transcription ────────────────────────────────────────────────────────────
+
 JNIEXPORT jstring JNICALL
 Java_app_pocketmonk_service_WhisperService_nativeTranscribe(
     JNIEnv *env, jclass /*clazz*/, jlong handle,
-    jfloatArray samples, jstring language)
+    jfloatArray samples, jstring language, jobject progressCallback)
 {
     auto *ctx = reinterpret_cast<whisper_context *>(handle);
     if (ctx == nullptr) return env->NewStringUTF("");
 
-    const char *lang = env->GetStringUTFChars(language, nullptr);
-    jsize n_samples = env->GetArrayLength(samples);
-    jfloat *pcm = env->GetFloatArrayElements(samples, nullptr);
+    const char *lang     = env->GetStringUTFChars(language, nullptr);
+    jsize       n_samples = env->GetArrayLength(samples);
+    jfloat     *pcm      = env->GetFloatArrayElements(samples, nullptr);
+
+    // Resolve the onProgress(Int) method on the callback object.
+    jclass    cbClass   = env->GetObjectClass(progressCallback);
+    jmethodID cbMethod  = env->GetMethodID(cbClass, "onProgress", "(I)V");
+    ProgressCbData cbData { env, progressCallback, cbMethod };
 
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.language         = (lang[0] == '\0' || (lang[0] == 'a' && lang[1] == 'u')) ? nullptr : lang;
-    params.translate        = false;
-    params.print_progress   = false;
-    params.print_timestamps = false;
-    params.single_segment   = false;
-    params.n_threads        = 4;
-    params.no_context       = true;
+    params.language                  = (lang[0] == '\0' || (lang[0] == 'a' && lang[1] == 'u'))
+                                       ? nullptr : lang;
+    params.translate                 = false;
+    params.print_progress            = false;
+    params.print_timestamps          = false;
+    params.single_segment            = false;
+    params.n_threads                 = 4;
+    params.no_context                = true;
+    params.progress_callback         = whisper_progress_cb;
+    params.progress_callback_user_data = &cbData;
 
     int rc = whisper_full(ctx, params, pcm, static_cast<int>(n_samples));
 
@@ -69,12 +101,9 @@ Java_app_pocketmonk_service_WhisperService_nativeTranscribe(
     int n_seg = whisper_full_n_segments(ctx);
     for (int i = 0; i < n_seg; i++) {
         const char *seg = whisper_full_get_segment_text(ctx, i);
-        if (seg != nullptr) {
-            result += seg;
-        }
+        if (seg != nullptr) result += seg;
     }
 
-    // Trim leading/trailing whitespace
     size_t start = result.find_first_not_of(" \t\n\r");
     size_t end   = result.find_last_not_of(" \t\n\r");
     if (start == std::string::npos) return env->NewStringUTF("");
