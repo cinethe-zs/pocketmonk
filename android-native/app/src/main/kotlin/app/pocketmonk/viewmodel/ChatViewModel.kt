@@ -752,15 +752,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun loadDocumentFromUri(uri: android.net.Uri) {
         val ctx = getApplication<android.app.Application>()
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val stream = ctx.contentResolver.openInputStream(uri) ?: return@launch
-            val content = stream.bufferedReader().readText().take(8000)
+            val bytes = try {
+                ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (_: Exception) { null } ?: return@launch
+
+            // Try UTF-8 first; fall back to ISO-8859-1 for Windows-1252/Latin-1 encoded files
+            val content = try {
+                val utf8 = bytes.toString(Charsets.UTF_8)
+                if ('\uFFFD' in utf8) bytes.toString(Charsets.ISO_8859_1) else utf8
+            } catch (_: Exception) {
+                bytes.toString(Charsets.ISO_8859_1)
+            }
+
             val name = ctx.contentResolver.query(
                 uri,
                 arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
                 null, null, null
             )?.use { cursor ->
-                cursor.moveToFirst()
-                cursor.getString(0)
+                if (cursor.moveToFirst()) cursor.getString(0) else null
             } ?: uri.lastPathSegment ?: "document.txt"
             withContext(kotlinx.coroutines.Dispatchers.Main) {
                 loadDocument(name, content)
