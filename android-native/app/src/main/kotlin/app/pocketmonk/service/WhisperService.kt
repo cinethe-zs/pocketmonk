@@ -14,7 +14,6 @@ import java.io.File
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
-import kotlin.math.roundToInt
 
 class WhisperService(private val context: Context) {
 
@@ -23,8 +22,8 @@ class WhisperService(private val context: Context) {
         const val MODEL_URL =
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
 
-        /** Maximum audio duration fed to whisper (10 minutes → avoid OOM). */
-        private const val MAX_AUDIO_SEC = 10 * 60
+        /** Maximum audio duration fed to whisper (5 minutes → avoid OOM). */
+        private const val MAX_AUDIO_SEC = 5 * 60
         private const val WHISPER_SAMPLE_RATE = 16_000
 
         /** Called from C++ with values 0–100 during whisper_full. */
@@ -146,14 +145,15 @@ class WhisperService(private val context: Context) {
 
     /**
      * Decodes the first audio track from [uri] into a 16 kHz mono float PCM array.
-     * Caps at [MAX_AUDIO_SEC] seconds. Returns null on any error.
+     * Resamples on-the-fly into a pre-allocated output buffer — no ArrayList boxing,
+     * no intermediate source-rate buffer. Caps at [MAX_AUDIO_SEC] seconds.
+     * Returns null on any error.
      */
     private fun decodeAudio(uri: Uri): FloatArray? {
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(context, uri, null)
 
-            // Locate the first audio track
             val trackIndex = (0 until extractor.trackCount).firstOrNull { i ->
                 extractor.getTrackFormat(i)
                     .getString(MediaFormat.KEY_MIME)
@@ -168,18 +168,31 @@ class WhisperService(private val context: Context) {
             val channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             val maxUs        = MAX_AUDIO_SEC * 1_000_000L
 
+            // Pre-allocate output at 16 kHz — avoids ArrayList<Float> boxing overhead.
+            val durationUs = runCatching {
+                if (format.containsKey(MediaFormat.KEY_DURATION))
+                    format.getLong(MediaFormat.KEY_DURATION)
+                else maxUs
+            }.getOrDefault(maxUs).coerceAtMost(maxUs)
+            val maxOut = ((WHISPER_SAMPLE_RATE.toLong() * durationUs + 999_999L) / 1_000_000L).toInt() +
+                WHISPER_SAMPLE_RATE  // +1 s headroom
+            val out = FloatArray(maxOut)
+            var outCount = 0
+
             val codec = MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
             codec.start()
 
-            val pcm         = ArrayList<Float>(srcRate * 60) // pre-alloc ~1 min
-            val info        = MediaCodec.BufferInfo()
-            var inputDone   = false
-            var outputDone  = false
+            val info       = MediaCodec.BufferInfo()
+            var inputDone  = false
+            var outputDone = false
+            // src samples per output sample (ratio ≥ 1 for downsampling)
+            val ratio    = srcRate.toDouble() / WHISPER_SAMPLE_RATE
+            var srcTotal = 0L   // total mono source frames decoded so far
+            var prevMono = 0f   // last mono sample of previous codec block (boundary interpolation)
 
             try {
                 while (!outputDone) {
-                    // Feed input buffers
                     if (!inputDone) {
                         val inIdx = codec.dequeueInputBuffer(10_000L)
                         if (inIdx >= 0) {
@@ -200,24 +213,42 @@ class WhisperService(private val context: Context) {
                         }
                     }
 
-                    // Drain output buffers
                     val outIdx = codec.dequeueOutputBuffer(info, 10_000L)
                     if (outIdx >= 0) {
-                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0)
                             outputDone = true
-                        }
+
                         val outBuf = codec.getOutputBuffer(outIdx)
                         if (outBuf != null && info.size > 0) {
                             outBuf.position(info.offset)
                             outBuf.limit(info.offset + info.size)
                             val shorts = outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-                            // Mix all channels down to mono
-                            val framesInBlock = shorts.remaining() / channelCount
-                            repeat(framesInBlock) {
-                                var mono = 0f
-                                repeat(channelCount) { mono += shorts.get() / 32768f }
-                                pcm.add(mono / channelCount)
+                            val frames = shorts.remaining() / channelCount
+
+                            // Decode this codec block into a small temp mono array (no boxing).
+                            val block = FloatArray(frames)
+                            for (i in 0 until frames) {
+                                var m = 0f
+                                repeat(channelCount) { m += shorts.get() / 32768f }
+                                block[i] = m / channelCount
                             }
+
+                            // Resample block on-the-fly into `out` via linear interpolation.
+                            // We need both s0 and s1 to be within [prevMono .. block[frames-1]].
+                            while (outCount < maxOut) {
+                                val srcPos = outCount.toDouble() * ratio
+                                val s0Idx  = srcPos.toLong()
+                                val b0     = (s0Idx - srcTotal).toInt()
+                                val b1     = b0 + 1
+                                // Stop when s1 (b1) would fall outside the current block.
+                                if (b0 >= frames - 1) break
+                                val s0 = if (b0 < 0) prevMono else block[b0]
+                                val s1 = block[b1]
+                                out[outCount++] = s0 + (s1 - s0) * (srcPos - s0Idx).toFloat()
+                            }
+
+                            if (frames > 0) prevMono = block[frames - 1]
+                            srcTotal += frames
                         }
                         codec.releaseOutputBuffer(outIdx, false)
                     }
@@ -227,26 +258,12 @@ class WhisperService(private val context: Context) {
                 codec.release()
             }
 
-            val raw = FloatArray(pcm.size) { pcm[it] }
-            return if (srcRate == WHISPER_SAMPLE_RATE) raw
-            else resample(raw, srcRate, WHISPER_SAMPLE_RATE)
+            return if (outCount == 0) null else out.copyOf(outCount)
 
         } catch (_: Exception) {
             return null
         } finally {
             extractor.release()
-        }
-    }
-
-    /** Linear-interpolation resampler. */
-    private fun resample(input: FloatArray, srcRate: Int, dstRate: Int): FloatArray {
-        val ratio  = srcRate.toDouble() / dstRate
-        val outLen = (input.size / ratio).roundToInt()
-        return FloatArray(outLen) { i ->
-            val pos  = i * ratio
-            val idx  = pos.toInt().coerceAtMost(input.size - 2)
-            val frac = (pos - idx).toFloat()
-            input[idx] * (1f - frac) + input[idx + 1] * frac
         }
     }
 }
