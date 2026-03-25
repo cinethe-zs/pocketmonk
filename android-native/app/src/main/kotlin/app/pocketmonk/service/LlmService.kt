@@ -20,6 +20,7 @@ import com.google.ai.edge.litertlm.SessionConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.CancellationException
+import java.util.concurrent.locks.ReentrantLock
 import com.google.ai.edge.litertlm.Message as LitMessage
 
 class LlmService(private val context: Context) {
@@ -34,6 +35,14 @@ class LlmService(private val context: Context) {
     private var currentConversation: com.google.ai.edge.litertlm.Conversation? = null
     private var currentSession: Session? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Serializes all native session/conversation creation and teardown.
+     * LiteRT allows only one Session OR Conversation to be active at a time.
+     * runSession() holds this lock for its full duration (createSession → generateContent → close).
+     * chat() holds it only for (cancelProcess + close staleConv + createConversation).
+     */
+    private val engineLock = ReentrantLock()
 
     suspend fun initialize(
         modelPath: String,
@@ -96,9 +105,7 @@ class LlmService(private val context: Context) {
         // cleanup hasn't finished before createConversation is called.
         Thread {
             try {
-                // Close previous conversation; native delete is async so we retry below.
-                try { staleConv?.close() } catch (_: Exception) {}
-
+                // Build config before acquiring the lock (pure computation, no native calls).
                 val effectiveTemp = if (temperature < 0.1f) 1.0f else temperature
                 val sysText = buildString {
                     if (!systemPrompt.isNullOrBlank()) append(systemPrompt)
@@ -116,27 +123,31 @@ class LlmService(private val context: Context) {
                     ),
                 )
 
-                // Retry createConversation with backoff — the native slot may not be free yet.
+                // Acquire the engine lock: blocks until any active runSession() (title generation,
+                // summarization, web search helpers) has fully closed its Session.
+                // This prevents FAILED_PRECONDITION "a session already exists".
+                engineLock.lock()
                 var conversation: com.google.ai.edge.litertlm.Conversation? = null
-                var lastConvEx: Exception? = null
-                for (attempt in 0..4) {
-                    if (attempt > 0) Thread.sleep(200L * attempt)
+                var convException: Exception? = null
+                try {
+                    try { staleConv?.cancelProcess() } catch (_: Exception) {}
+                    try { staleConv?.close() } catch (_: Exception) {}
                     try {
                         conversation = eng.createConversation(config)
-                        break
                     } catch (e: Exception) {
-                        lastConvEx = e
-                        if (e.message?.contains("FAILED_PRECONDITION", ignoreCase = true) != true) break
+                        convException = e
                     }
+                } finally {
+                    engineLock.unlock()
                 }
 
                 if (conversation == null) {
-                    val msg = lastConvEx?.message ?: "Failed to create conversation"
+                    val msg = convException?.message ?: "Failed to create conversation"
                     mainHandler.post { isInferring = false; onErrorOuter(msg) }
                     return@Thread
                 }
 
-                // If cancel() was called while we were setting up, abort cleanly.
+                // If cancel() was called while we were waiting for the lock, abort cleanly.
                 if (!isInferring) {
                     try { conversation.close() } catch (_: Exception) {}
                     return@Thread
@@ -488,8 +499,13 @@ class LlmService(private val context: Context) {
 
     // ── Helpers ────────────────────────────────────────────────
 
-    /** Runs [block] on a fresh Session, closing it afterward. Returns null on any exception. */
+    /**
+     * Runs [block] on a fresh Session, closing it afterward. Returns null on any exception.
+     * Holds [engineLock] for the full duration so that createConversation() in chat() cannot
+     * overlap with an active Session — prevents FAILED_PRECONDITION "a session already exists".
+     */
     private fun <T> runSession(eng: Engine, block: (Session) -> T): T? {
+        engineLock.lock()
         var session: Session? = null
         return try {
             session = eng.createSession()
@@ -497,11 +513,10 @@ class LlmService(private val context: Context) {
             try { session.close() } catch (_: Exception) {}
             result
         } catch (e: Exception) {
-            // Always close the session, even when block() throws — otherwise the
-            // native session leaks and all subsequent createConversation() calls fail
-            // with FAILED_PRECONDITION "a session already exists".
             try { session?.close() } catch (_: Exception) {}
             null
+        } finally {
+            engineLock.unlock()
         }
     }
 
