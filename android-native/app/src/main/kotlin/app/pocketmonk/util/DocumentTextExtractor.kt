@@ -24,10 +24,13 @@ object DocumentTextExtractor {
     private val TEXT_EXTS = setOf(
         "txt", "md", "csv", "json", "xml", "html", "htm",
         "log", "yaml", "yml", "toml", "ini", "cfg", "conf",
-        "py", "js", "ts", "kt", "java", "swift", "c", "cpp", "h", "rb", "go", "rs"
+        "py", "js", "ts", "kt", "java", "swift", "c", "cpp", "h", "rb", "go", "rs",
+        "sh", "bat", "r", "dart", "php", "lua", "pl", "sql", "tex", "rst"
     )
     private val ZIP_XML_EXTS = setOf("docx", "pptx", "xlsx", "odt", "odp", "ods")
-    private val IMAGE_EXTS   = setOf("jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif")
+    private val IMAGE_EXTS   = setOf(
+        "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tiff", "tif"
+    )
 
     private val ZIP_XML_MIMES = setOf(
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -43,24 +46,31 @@ object DocumentTextExtractor {
 
     /**
      * Extract plain text from a non-image document.
-     * @return extracted text, empty string if the file has no readable text,
-     *         or null if the format is unsupported.
+     * Returns extracted text, empty string if the file has no readable text,
+     * or null if the format is unsupported.
      */
     suspend fun extract(bytes: ByteArray, mimeType: String?, fileName: String): String? {
         val ext = fileName.substringAfterLast('.', "").lowercase()
         return when {
-            ext == "pdf" || mimeType == "application/pdf"                -> extractPdf(bytes)
-            ext in ZIP_XML_EXTS || mimeType in ZIP_XML_MIMES             -> extractZipXml(bytes)
-            ext == "doc"  || mimeType == "application/msword"            -> extractDoc(bytes)
-            ext == "ppt"  || mimeType == "application/vnd.ms-powerpoint" -> extractPpt(bytes)
-            ext == "xls"  || mimeType == "application/vnd.ms-excel"      -> extractXls(bytes)
-            mimeType?.startsWith("text/") == true || ext in TEXT_EXTS    -> decodeText(bytes)
-            else                                                          -> null
+            ext == "pdf"  || mimeType == "application/pdf"                -> extractPdf(bytes)
+            ext in ZIP_XML_EXTS || mimeType in ZIP_XML_MIMES              -> extractZipXml(bytes)
+            ext == "epub" || mimeType == "application/epub+zip"           -> extractEpub(bytes)
+            ext == "doc"  || mimeType == "application/msword"             -> extractDoc(bytes)
+            ext == "ppt"  || mimeType == "application/vnd.ms-powerpoint"  -> extractPpt(bytes)
+            ext == "xls"  || mimeType == "application/vnd.ms-excel"       -> extractXls(bytes)
+            ext == "rtf"  || mimeType in setOf("application/rtf","text/rtf") -> extractRtf(bytes)
+            ext == "fb2"                                                   -> extractFb2(bytes)
+            ext in setOf("srt", "vtt", "sub")                             -> extractSubtitle(bytes)
+            ext in setOf("vcf", "vcard") ||
+                mimeType in setOf("text/vcard", "text/x-vcard")           -> extractVcf(bytes)
+            ext in setOf("ics", "ical") || mimeType == "text/calendar"    -> extractIcs(bytes)
+            mimeType?.startsWith("text/") == true || ext in TEXT_EXTS     -> decodeText(bytes)
+            else                                                           -> null
         }
     }
 
     /**
-     * Run on-device OCR on an image. Suspend until ML Kit completes.
+     * Run on-device OCR on an image. Tries all 4 orientations before giving up.
      */
     suspend fun extractFromImage(bytes: ByteArray): String {
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return ""
@@ -98,6 +108,170 @@ object DocumentTextExtractor {
                 sb.toString().trim()
             }
         }.getOrDefault("")
+    }
+
+    // --- EPUB -----------------------------------------------------------------------
+
+    private fun extractEpub(bytes: ByteArray): String {
+        val sb = StringBuilder()
+        val skipNames = setOf("toc", "nav", "cover", "ncx")
+        try {
+            ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null && sb.length < 200_000) {
+                    val baseName = entry.name.substringAfterLast('/').substringBeforeLast('.').lowercase()
+                    if (!entry.isDirectory &&
+                        (entry.name.endsWith(".xhtml") || entry.name.endsWith(".html")) &&
+                        skipNames.none { baseName.contains(it) }
+                    ) {
+                        val text = stripHtml(zip.readBytes().toString(Charsets.UTF_8))
+                        if (text.isNotBlank()) { sb.appendLine(text); sb.appendLine() }
+                    }
+                    zip.closeEntry()
+                    entry = zip.nextEntry
+                }
+            }
+        } catch (_: Exception) {}
+        return sb.toString().trim()
+    }
+
+    // --- FictionBook 2 (FB2) --------------------------------------------------------
+
+    private fun extractFb2(bytes: ByteArray): String {
+        val xml = decodeText(bytes)
+        val body = Regex("<body[^>]*>(.*?)</body>",
+            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+            .find(xml)?.groupValues?.get(1) ?: xml
+        return Regex("<(?:p|v|subtitle|text-author)[^>]*>(.*?)</(?:p|v|subtitle|text-author)>",
+            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+            .findAll(body)
+            .map { it.groupValues[1].replace(Regex("<[^>]+>"), "").decodeEntities().trim() }
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim()
+    }
+
+    // --- Subtitles (SRT / VTT / SUB) ------------------------------------------------
+
+    private fun extractSubtitle(bytes: ByteArray): String {
+        val timestampRe = Regex("""\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*.*""")
+        val indexRe     = Regex("""\d+""")
+        val vttHeaderRe = Regex("""^(WEBVTT|NOTE|STYLE|REGION).*""", RegexOption.IGNORE_CASE)
+        return decodeText(bytes)
+            .lines()
+            .filterNot { line ->
+                val t = line.trim()
+                t.isEmpty() || timestampRe.matches(t) || indexRe.matches(t) || vttHeaderRe.matches(t)
+            }
+            .map { it.replace(Regex("<[^>]+>"), "").trim() } // strip inline tags
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim()
+    }
+
+    // --- vCard (VCF) ----------------------------------------------------------------
+
+    private fun extractVcf(bytes: ByteArray): String {
+        val keep = setOf("FN", "N", "TEL", "EMAIL", "ORG", "TITLE", "ADR", "URL", "NOTE", "BDAY")
+        return decodeText(bytes)
+            .lines()
+            .mapNotNull { line ->
+                val key = line.substringBefore(":").substringBefore(";").uppercase()
+                if (key in keep) "$key: ${line.substringAfter(":").trim()}".takeIf { line.contains(":") }
+                else null
+            }
+            .joinToString("\n")
+            .trim()
+    }
+
+    // --- iCalendar (ICS) ------------------------------------------------------------
+
+    private fun extractIcs(bytes: ByteArray): String {
+        val keep = setOf(
+            "SUMMARY", "DESCRIPTION", "DTSTART", "DTEND", "LOCATION",
+            "ORGANIZER", "ATTENDEE", "STATUS", "RRULE"
+        )
+        return decodeText(bytes)
+            .lines()
+            .mapNotNull { line ->
+                val key = line.substringBefore(":").substringBefore(";").uppercase()
+                if (key in keep) {
+                    val value = line.substringAfter(":").replace("\\n", "\n").replace("\\,", ",").trim()
+                    "$key: $value"
+                } else null
+            }
+            .joinToString("\n")
+            .trim()
+    }
+
+    // --- RTF ------------------------------------------------------------------------
+
+    private fun extractRtf(bytes: ByteArray): String {
+        val rtf = bytes.toString(Charsets.ISO_8859_1)
+        val sb = StringBuilder()
+        var i = 0
+        var depth = 0
+        var skipDepth = 0 // non-zero → inside an ignorable destination
+
+        while (i < rtf.length) {
+            when (val c = rtf[i]) {
+                '{' -> {
+                    depth++
+                    // Ignorable destination: {\* \word ...}
+                    val ahead = rtf.substring(i + 1, minOf(i + 5, rtf.length)).trimStart()
+                    if (skipDepth == 0 && ahead.startsWith("\\*")) skipDepth = depth
+                    i++
+                }
+                '}' -> {
+                    if (depth == skipDepth) skipDepth = 0
+                    depth--
+                    i++
+                }
+                '\\' -> {
+                    i++
+                    if (i >= rtf.length) break
+                    when (val next = rtf[i]) {
+                        '\\' -> { if (skipDepth == 0) sb.append('\\'); i++ }
+                        '{'  -> { if (skipDepth == 0) sb.append('{');  i++ }
+                        '}'  -> { if (skipDepth == 0) sb.append('}');  i++ }
+                        '\n', '\r' -> i++
+                        '\'' -> {
+                            i++
+                            if (i + 1 < rtf.length) {
+                                val code = rtf.substring(i, i + 2).toIntOrNull(16)
+                                if (skipDepth == 0 && code != null) sb.append(code.toChar())
+                                i += 2
+                            }
+                        }
+                        else -> if (next.isLetter() || next == '-') {
+                            val start = i
+                            if (rtf[i] == '-') i++
+                            while (i < rtf.length && rtf[i].isLetter()) i++
+                            val word = rtf.substring(start, i)
+                            // Skip optional numeric parameter
+                            if (i < rtf.length && rtf[i] == '-') i++
+                            while (i < rtf.length && rtf[i].isDigit()) i++
+                            // Consume trailing delimiter space
+                            if (i < rtf.length && rtf[i] == ' ') i++
+                            if (skipDepth == 0) when (word) {
+                                "par", "pard", "page", "column", "sect" -> sb.append('\n')
+                                "line", "softline" -> sb.append('\n')
+                                "tab" -> sb.append('\t')
+                            }
+                        } else i++
+                    }
+                }
+                '\r', '\n' -> i++ // bare newlines in RTF stream are ignored
+                else -> { if (skipDepth == 0) sb.append(c); i++ }
+            }
+        }
+
+        return sb.toString()
+            .replace(Regex("[ \\t]+"), " ")
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim()
     }
 
     // --- Legacy Office binary formats (Apache POI) ----------------------------------
@@ -190,15 +364,28 @@ object DocumentTextExtractor {
         return sb.toString().trim()
     }
 
+    // --- Shared utilities -----------------------------------------------------------
+
+    private fun stripHtml(html: String): String =
+        html.replace(Regex("<style[^>]*>.*?</style>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<script[^>]*>.*?</script>", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("<p[^>]*>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("<[^>]+>"), "")
+            .decodeEntities()
+            .replace(Regex("[ \\t]+"), " ")
+            .replace(Regex("\n{3,}"), "\n\n")
+            .trim()
+
+    private fun String.decodeEntities(): String =
+        replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", "\"").replace("&apos;", "'").replace("&nbsp;", " ")
+
     private fun xmlText(xml: String, tag: String): String {
         val t = Regex.escape(tag)
         return Regex("<$t(?:\\s[^>]*)?>([^<]*)</$t>")
             .findAll(xml)
-            .joinToString(" ") {
-                it.groupValues[1]
-                    .replace("&amp;", "&").replace("&lt;", "<")
-                    .replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'")
-            }
+            .joinToString(" ") { it.groupValues[1].decodeEntities() }
     }
 
     private fun decodeText(bytes: ByteArray): String {
