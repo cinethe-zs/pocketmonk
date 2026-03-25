@@ -15,7 +15,6 @@ import app.pocketmonk.service.ModelEntry
 import app.pocketmonk.service.ModelManager
 import app.pocketmonk.service.PersonaStore
 import app.pocketmonk.service.WebSearchService
-import app.pocketmonk.service.WhisperService
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +31,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = ConversationRepository(application)
     val llmService = LlmService(application)
     val modelManager = ModelManager(application)
-    val whisperService = WhisperService(application)
     private val webSearchService = WebSearchService()
     private val personaStore = PersonaStore(application)
     private val gson = GsonBuilder().create()
@@ -41,46 +39,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
 
     private var downloadJob: Job? = null
-
-    private val whisperPrefs =
-        application.getSharedPreferences("whisper_prefs", android.content.Context.MODE_PRIVATE)
-
-    private val _whisperLanguage = MutableStateFlow(
-        whisperPrefs.getString("language", "auto") ?: "auto"
-    )
-    val whisperLanguage: StateFlow<String> = _whisperLanguage.asStateFlow()
-
-    private val _whisperModelPref = MutableStateFlow(
-        whisperPrefs.getString("model_pref", "auto") ?: "auto"
-    )
-    val whisperModelPref: StateFlow<String> = _whisperModelPref.asStateFlow()
-
-    fun setWhisperLanguage(lang: String) {
-        _whisperLanguage.value = lang
-        whisperPrefs.edit().putString("language", lang).apply()
-    }
-
-    fun setWhisperModelPref(pref: String) {
-        _whisperModelPref.value = pref
-        whisperPrefs.edit().putString("model_pref", pref).apply()
-    }
-
-    private val _whisperTinyDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val whisperTinyDownloadState: StateFlow<DownloadState> = _whisperTinyDownloadState.asStateFlow()
-    private var whisperTinyDownloadJob: Job? = null
-
-    private val _whisperTinyEnDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val whisperTinyEnDownloadState: StateFlow<DownloadState> = _whisperTinyEnDownloadState.asStateFlow()
-    private var whisperTinyEnDownloadJob: Job? = null
-
-    private val _whisperBaseEnDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val whisperBaseEnDownloadState: StateFlow<DownloadState> = _whisperBaseEnDownloadState.asStateFlow()
-    private var whisperBaseEnDownloadJob: Job? = null
-
-    private val _whisperDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val whisperDownloadState: StateFlow<DownloadState> = _whisperDownloadState.asStateFlow()
-
-    private var whisperDownloadJob: Job? = null
 
     private val _isTranscribing = MutableStateFlow(false)
     val isTranscribing: StateFlow<Boolean> = _isTranscribing.asStateFlow()
@@ -822,66 +780,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val isAudio = !isVideo &&
                 app.pocketmonk.util.DocumentTextExtractor.isAudio(mimeType, ext)
 
-            // Audio: decode via MediaExtractor + MediaCodec → Whisper
+            // Audio file transcription is not supported.
             if (isAudio) {
-                if (!whisperService.isModelDownloaded()) {
-                    withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        _errorMessage.value =
-                            "Download the Whisper model in Settings → Speech Recognition to transcribe audio."
-                    }
-                    return@launch
-                }
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    _isTranscribing.value = true
-                    _transcriptionProgress.value = 0f
-                }
-                val transcript = try {
-                    whisperService.transcribeUri(
-                        uri,
-                        language  = _whisperLanguage.value,
-                        modelPref = _whisperModelPref.value,
-                        onProgress = { progress ->
-                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                _transcriptionProgress.value = progress
-                            }
-                        },
-                        onPartialResult = { partial ->
-                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                if (_documentName.value == null) _documentName.value = name
-                                _audioLog.value = partial.take(8000)
-                            }
-                        },
-                    )
-                } catch (e: Throwable) {
-                    withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        _isTranscribing.value = false
-                        _transcriptionProgress.value = 0f
-                        _documentName.value = null
-                        _audioLog.value = null
-                        _errorMessage.value = "Failed to transcribe \"$name\": ${e.message}"
-                    }
-                    return@launch
-                }
-                withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    _isTranscribing.value = false
-                    _transcriptionProgress.value = 0f
-                    if (transcript.isBlank()) {
-                        _documentName.value = null
-                        _audioLog.value = null
-                        _errorMessage.value = "No speech detected in \"$name\"."
-                    } else {
-                        val truncated = transcript.take(8000)
-                        _documentName.value = name
-                        _documentContent.value = "Audio transcript:\n$truncated"
-                        _documentLog.value = null
-                        _ocrLog.value = null
-                        _audioLog.value = truncated
-                    }
+                    _errorMessage.value = "Audio file transcription is not supported."
                 }
                 return@launch
             }
 
-            // Video: frame OCR + optional Whisper audio transcription
+            // Video: frame OCR only
             if (isVideo) {
                 val ocrText = try {
                     app.pocketmonk.util.DocumentTextExtractor.extractFromVideo(ctx, uri)
@@ -891,58 +798,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     return@launch
                 }
-                // Show OCR result immediately — don't wait for audio transcription.
-                if (ocrText.isNotBlank()) {
-                    withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        _documentName.value = name
-                        _ocrLog.value = ocrText.take(8000)
-                    }
-                }
-                val audioText = if (whisperService.isModelDownloaded()) {
-                    withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        _isTranscribing.value = true
-                        _transcriptionProgress.value = 0f
-                    }
-                    try {
-                        whisperService.transcribeUri(
-                            uri,
-                            language  = _whisperLanguage.value,
-                            modelPref = _whisperModelPref.value,
-                            onProgress = { progress ->
-                                viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                    _transcriptionProgress.value = progress
-                                }
-                            },
-                            onPartialResult = { partial ->
-                                viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                    _audioLog.value = partial.take(8000)
-                                }
-                            },
-                        )
-                    } catch (_: Throwable) { "" }
-                    .also {
-                        withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            _isTranscribing.value = false
-                            _transcriptionProgress.value = 0f
-                        }
-                    }
-                } else ""
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    val combined = buildString {
-                        if (ocrText.isNotBlank()) { append("On-screen text (OCR):\n"); append(ocrText) }
-                        if (audioText.isNotBlank()) { if (isNotEmpty()) append("\n\n"); append("Audio transcript:\n"); append(audioText) }
-                    }
-                    if (combined.isBlank()) {
-                        _errorMessage.value = "No text or speech found in \"$name\"."
+                    if (ocrText.isBlank()) {
+                        _errorMessage.value = "No text found in \"$name\"."
                         _documentName.value = null
                         _ocrLog.value = null
-                        _audioLog.value = null
                     } else {
                         _documentName.value = name
-                        _documentContent.value = combined.take(8000)
+                        _documentContent.value = "On-screen text (OCR):\n${ocrText.take(8000)}"
                         _documentLog.value = null
-                        _ocrLog.value = ocrText.take(8000).takeIf { it.isNotBlank() }
-                        _audioLog.value = audioText.take(8000).takeIf { it.isNotBlank() }
+                        _ocrLog.value = ocrText.take(8000)
+                        _audioLog.value = null
                     }
                 }
                 return@launch
@@ -1123,120 +989,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteModel(entry: ModelEntry) {
         modelManager.deleteModel(entry)
-    }
-
-    // ── Whisper model download ─────────────────────────────────────────────────
-
-    fun downloadWhisperTinyModel() {
-        if (_whisperTinyDownloadState.value is DownloadState.Downloading) return
-        whisperTinyDownloadJob = viewModelScope.launch {
-            _whisperTinyDownloadState.value = DownloadState.Downloading("whisper-tiny", 0f)
-            try {
-                val file = whisperService.downloadTinyModel { progress ->
-                    _whisperTinyDownloadState.value = DownloadState.Downloading("whisper-tiny", progress)
-                }
-                _whisperTinyDownloadState.value = DownloadState.Done(file.absolutePath)
-            } catch (e: Exception) {
-                _whisperTinyDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
-            }
-        }
-    }
-
-    fun cancelWhisperTinyDownload() {
-        whisperTinyDownloadJob?.cancel()
-        whisperTinyDownloadJob = null
-        _whisperTinyDownloadState.value = DownloadState.Idle
-    }
-
-    fun dismissWhisperTinyDownloadError() {
-        _whisperTinyDownloadState.value = DownloadState.Idle
-    }
-
-    fun deleteWhisperTinyModel() {
-        whisperService.releaseModel()
-        whisperService.tinyModelFile().delete()
-        _whisperTinyDownloadState.value = DownloadState.Idle
-    }
-
-    fun downloadWhisperModel() {
-        if (_whisperDownloadState.value is DownloadState.Downloading) return
-        whisperDownloadJob = viewModelScope.launch {
-            _whisperDownloadState.value = DownloadState.Downloading("whisper-base", 0f)
-            try {
-                val file = whisperService.downloadModel { progress ->
-                    _whisperDownloadState.value =
-                        DownloadState.Downloading("whisper-base", progress)
-                }
-                _whisperDownloadState.value = DownloadState.Done(file.absolutePath)
-            } catch (e: Exception) {
-                _whisperDownloadState.value =
-                    DownloadState.Error(e.message ?: "Download failed")
-            }
-        }
-    }
-
-    fun cancelWhisperDownload() {
-        whisperDownloadJob?.cancel()
-        whisperDownloadJob = null
-        _whisperDownloadState.value = DownloadState.Idle
-    }
-
-    fun dismissWhisperDownloadError() {
-        _whisperDownloadState.value = DownloadState.Idle
-    }
-
-    fun deleteWhisperModel() {
-        whisperService.releaseModel()
-        whisperService.modelFile().delete()
-        _whisperDownloadState.value = DownloadState.Idle
-    }
-
-    fun downloadWhisperTinyEnModel() {
-        if (_whisperTinyEnDownloadState.value is DownloadState.Downloading) return
-        whisperTinyEnDownloadJob = viewModelScope.launch {
-            _whisperTinyEnDownloadState.value = DownloadState.Downloading("whisper-tiny-en", 0f)
-            try {
-                val file = whisperService.downloadTinyEnModel { p ->
-                    _whisperTinyEnDownloadState.value = DownloadState.Downloading("whisper-tiny-en", p)
-                }
-                _whisperTinyEnDownloadState.value = DownloadState.Done(file.absolutePath)
-            } catch (e: Exception) {
-                _whisperTinyEnDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
-            }
-        }
-    }
-    fun cancelWhisperTinyEnDownload() {
-        whisperTinyEnDownloadJob?.cancel(); whisperTinyEnDownloadJob = null
-        _whisperTinyEnDownloadState.value = DownloadState.Idle
-    }
-    fun dismissWhisperTinyEnDownloadError() { _whisperTinyEnDownloadState.value = DownloadState.Idle }
-    fun deleteWhisperTinyEnModel() {
-        whisperService.releaseModel(); whisperService.tinyEnModelFile().delete()
-        _whisperTinyEnDownloadState.value = DownloadState.Idle
-    }
-
-    fun downloadWhisperBaseEnModel() {
-        if (_whisperBaseEnDownloadState.value is DownloadState.Downloading) return
-        whisperBaseEnDownloadJob = viewModelScope.launch {
-            _whisperBaseEnDownloadState.value = DownloadState.Downloading("whisper-base-en", 0f)
-            try {
-                val file = whisperService.downloadBaseEnModel { p ->
-                    _whisperBaseEnDownloadState.value = DownloadState.Downloading("whisper-base-en", p)
-                }
-                _whisperBaseEnDownloadState.value = DownloadState.Done(file.absolutePath)
-            } catch (e: Exception) {
-                _whisperBaseEnDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
-            }
-        }
-    }
-    fun cancelWhisperBaseEnDownload() {
-        whisperBaseEnDownloadJob?.cancel(); whisperBaseEnDownloadJob = null
-        _whisperBaseEnDownloadState.value = DownloadState.Idle
-    }
-    fun dismissWhisperBaseEnDownloadError() { _whisperBaseEnDownloadState.value = DownloadState.Idle }
-    fun deleteWhisperBaseEnModel() {
-        whisperService.releaseModel(); whisperService.baseEnModelFile().delete()
-        _whisperBaseEnDownloadState.value = DownloadState.Idle
     }
 
     fun useLocalModel(path: String) {
