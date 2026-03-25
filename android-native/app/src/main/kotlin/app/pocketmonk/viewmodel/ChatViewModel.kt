@@ -806,6 +806,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun handleSharedFile(uri: android.net.Uri) {
+        newConversation()
+        loadDocumentFromUri(uri)
+    }
+
     fun deleteConversation(id: String) {
         viewModelScope.launch {
             repo.delete(id)

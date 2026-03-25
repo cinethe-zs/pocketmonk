@@ -1,10 +1,15 @@
 package app.pocketmonk
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -16,9 +21,16 @@ import app.pocketmonk.ui.theme.PocketMonkTheme
 import app.pocketmonk.viewmodel.ChatViewModel
 
 class MainActivity : ComponentActivity() {
+
+    // Shared file URI — set on fresh launch or new intent, consumed by ChatScreen.
+    // Backed by Compose state so ChatScreen recomposes automatically when it changes.
+    var pendingShareUri: Uri? by mutableStateOf(null)
+        private set
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingShareUri = intent.shareStreamUri()
         setContent {
             PocketMonkTheme {
                 val navController = rememberNavController()
@@ -29,8 +41,6 @@ class MainActivity : ComponentActivity() {
                     composable("launch") {
                         val context = LocalContext.current
                         LaunchedEffect(Unit) {
-                            // If a previous crash was detected, go to setup so the user
-                            // sees the crash banner and can choose what to do next.
                             if (PocketMonkApp.getLastCrash(context) != null) {
                                 navController.navigate("setup") {
                                     popUpTo("launch") { inclusive = true }
@@ -38,7 +48,6 @@ class MainActivity : ComponentActivity() {
                                 return@LaunchedEffect
                             }
 
-                            // Auto-load a known-good model path, or the first local file found
                             val savedPath = viewModel.modelManager.getActiveModelPath()
                             val localFiles = viewModel.modelManager.listLocalFiles()
                             when {
@@ -70,8 +79,6 @@ class MainActivity : ComponentActivity() {
                             viewModel = viewModel,
                             onModelReady = { modelPath ->
                                 viewModel.initModel(modelPath)
-                                // If "chat" is already in the back stack (user came from chat),
-                                // pop back to it. Otherwise navigate fresh to chat.
                                 if (!navController.popBackStack("chat", inclusive = false)) {
                                     navController.navigate("chat") {
                                         popUpTo("setup") { inclusive = true }
@@ -91,4 +98,19 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.shareStreamUri()?.let { pendingShareUri = it }
+    }
+
+    fun consumePendingShareUri() {
+        pendingShareUri = null
+    }
 }
+
+/** Returns the EXTRA_STREAM Uri if this is an ACTION_SEND intent, otherwise null. */
+@Suppress("DEPRECATION")
+private fun Intent.shareStreamUri(): Uri? =
+    if (action == Intent.ACTION_SEND) getParcelableExtra<Uri>(Intent.EXTRA_STREAM) else null

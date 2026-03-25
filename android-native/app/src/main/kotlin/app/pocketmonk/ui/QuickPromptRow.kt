@@ -30,11 +30,21 @@ private val QUICK_PROMPTS = listOf(
     "Step by step" to "Explain step by step how to:\n\n",
 )
 
+private val DOCUMENT_PROMPTS = listOf(
+    "Summarize this" to "Summarize this document.",
+    "Key points" to "What are the key points of this document?",
+    "Translate this" to "Translate this document to English.",
+    "Explain this" to "Explain this document in simple terms.",
+    "Quiz me" to "Quiz me on the content of this document.",
+)
+
 @Composable
 fun QuickPromptRow(
     onPromptSelected: (String) -> Unit,
+    hasDocument: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val prompts = if (hasDocument) DOCUMENT_PROMPTS else QUICK_PROMPTS
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = modifier
@@ -42,7 +52,7 @@ fun QuickPromptRow(
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 4.dp)
     ) {
-        QUICK_PROMPTS.forEach { (label, prompt) ->
+        prompts.forEach { (label, prompt) ->
             FilterChip(
                 selected = false,
                 onClick = { onPromptSelected(prompt) },

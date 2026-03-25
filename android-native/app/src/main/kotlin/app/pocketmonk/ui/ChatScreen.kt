@@ -232,6 +232,14 @@ fun ChatScreen(
         lastCrash = null
     }
 
+    // Consume share intent URI — load file and start a fresh conversation
+    val activity = context as app.pocketmonk.MainActivity
+    LaunchedEffect(activity.pendingShareUri) {
+        val uri = activity.pendingShareUri ?: return@LaunchedEffect
+        activity.consumePendingShareUri()
+        viewModel.handleSharedFile(uri)
+    }
+
     // Auto-scroll to bottom on new messages
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -579,7 +587,8 @@ fun ChatScreen(
                         onPromptSelected = { prompt ->
                             inputText = if (inputText.isBlank()) prompt
                                         else "${inputText.trimEnd()}\n$prompt"
-                        }
+                        },
+                        hasDocument = documentName != null
                     )
 
                     // Document pill — visible when a document is loaded
