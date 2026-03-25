@@ -113,7 +113,22 @@ class LlmService(private val context: Context) {
                         append("\n\n[Summary of earlier conversation: $contextSummary]")
                     }
                 }
-                val initialMsgs = buildLitMessages(history.dropLast(1))
+                // If the second-to-last message is a search/document result, merge it with the
+                // last user message into a single sendMessageAsync call. Leaving it as a lone
+                // user turn in initialMessages causes LiteRT to create an internal session for
+                // that pending turn, then sendMessageAsync creates another → FAILED_PRECONDITION.
+                val lastMsg = history.last()
+                val penultimate = history.getOrNull(history.size - 2)
+                val initialMsgs: List<LitMessage>
+                val sendContent: String
+                if (penultimate?.isSearchResult == true) {
+                    initialMsgs = buildLitMessages(history.dropLast(2))
+                    sendContent = "${penultimate.content}\n\nUser question: ${lastMsg.content}"
+                } else {
+                    initialMsgs = buildLitMessages(history.dropLast(1))
+                    sendContent = lastMsg.content
+                }
+
                 val config = ConversationConfig(
                     systemInstruction = Contents.of(sysText),
                     initialMessages = initialMsgs,
@@ -124,8 +139,7 @@ class LlmService(private val context: Context) {
 
                 // Acquire the engine lock: blocks until any active runSession() (title generation,
                 // summarization, web search helpers) has fully closed its Session.
-                // Inside the lock, retry createConversation to handle the case where the native
-                // async delete of the stale conversation hasn't completed yet.
+                // Inside the lock, retry createConversation to handle any remaining async cleanup.
                 engineLock.lock()
                 var conversation: com.google.ai.edge.litertlm.Conversation? = null
                 var lastEx: Exception? = null
@@ -157,7 +171,7 @@ class LlmService(private val context: Context) {
                 }
                 currentConversation = conversation
 
-                val contentList = listOf(Content.Text(history.last().content))
+                val contentList = listOf(Content.Text(sendContent))
                 val watchdog = Runnable {
                     if (isInferring) {
                         cancel()
