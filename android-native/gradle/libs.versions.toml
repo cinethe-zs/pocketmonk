@@ -15,6 +15,7 @@ coreKtx = "1.16.0"
 appcompat = "1.7.0"
 litertlm = "0.9.0-alpha06"
 poi = "5.2.5"
+vosk = "0.3.47"
 
 [libraries]
 litertlm = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
@@ -37,6 +38,7 @@ pdfbox-android = { group = "com.tom-roush", name = "pdfbox-android", version.ref
 mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition", version.ref = "mlkitTextRecognition" }
 poi = { group = "org.apache.poi", name = "poi", version.ref = "poi" }
 poi-scratchpad = { group = "org.apache.poi", name = "poi-scratchpad", version.ref = "poi" }
+vosk = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

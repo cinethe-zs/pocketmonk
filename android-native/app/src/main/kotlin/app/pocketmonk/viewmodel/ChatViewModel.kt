@@ -14,6 +14,7 @@ import app.pocketmonk.service.LlmService
 import app.pocketmonk.service.ModelEntry
 import app.pocketmonk.service.ModelManager
 import app.pocketmonk.service.PersonaStore
+import app.pocketmonk.service.VoskService
 import app.pocketmonk.service.WebSearchService
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
@@ -31,6 +32,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = ConversationRepository(application)
     val llmService = LlmService(application)
     val modelManager = ModelManager(application)
+    val voskService = VoskService(application)
     private val webSearchService = WebSearchService()
     private val personaStore = PersonaStore(application)
     private val gson = GsonBuilder().create()
@@ -39,6 +41,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
 
     private var downloadJob: Job? = null
+
+    private val voskPrefs =
+        application.getSharedPreferences("vosk_prefs", android.content.Context.MODE_PRIVATE)
+
+    private val _voskLanguage = MutableStateFlow(
+        voskPrefs.getString("language", "en") ?: "en"
+    )
+    val voskLanguage: StateFlow<String> = _voskLanguage.asStateFlow()
+
+    fun setVoskLanguage(lang: String) {
+        _voskLanguage.value = lang
+        voskPrefs.edit().putString("language", lang).apply()
+    }
+
+    private val _voskEnDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val voskEnDownloadState: StateFlow<DownloadState> = _voskEnDownloadState.asStateFlow()
+    private var voskEnDownloadJob: Job? = null
+
+    private val _voskFrDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val voskFrDownloadState: StateFlow<DownloadState> = _voskFrDownloadState.asStateFlow()
+    private var voskFrDownloadJob: Job? = null
 
     private val _isTranscribing = MutableStateFlow(false)
     val isTranscribing: StateFlow<Boolean> = _isTranscribing.asStateFlow()
@@ -780,15 +803,66 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val isAudio = !isVideo &&
                 app.pocketmonk.util.DocumentTextExtractor.isAudio(mimeType, ext)
 
-            // Audio file transcription is not supported.
+            // Audio: transcribe via Vosk
             if (isAudio) {
+                val lang = voskService.bestAvailableLanguage(_voskLanguage.value)
+                if (lang == null) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        _errorMessage.value =
+                            "Download a speech recognition model in Settings to transcribe audio."
+                    }
+                    return@launch
+                }
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    _errorMessage.value = "Audio file transcription is not supported."
+                    _isTranscribing.value = true
+                    _transcriptionProgress.value = 0f
+                }
+                val transcript = try {
+                    voskService.transcribeUri(
+                        uri,
+                        language = lang,
+                        onProgress = { progress ->
+                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                _transcriptionProgress.value = progress.coerceIn(0f, 1f)
+                            }
+                        },
+                        onPartialResult = { partial ->
+                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                if (_documentName.value == null) _documentName.value = name
+                                _audioLog.value = partial.take(8000)
+                            }
+                        },
+                    )
+                } catch (e: Throwable) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        _isTranscribing.value = false
+                        _transcriptionProgress.value = 0f
+                        _documentName.value = null
+                        _audioLog.value = null
+                        _errorMessage.value = "Failed to transcribe \"$name\": ${e.message}"
+                    }
+                    return@launch
+                }
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    _isTranscribing.value = false
+                    _transcriptionProgress.value = 0f
+                    if (transcript.isBlank()) {
+                        _documentName.value = null
+                        _audioLog.value = null
+                        _errorMessage.value = "No speech detected in \"$name\"."
+                    } else {
+                        val truncated = transcript.take(8000)
+                        _documentName.value = name
+                        _documentContent.value = "Audio transcript:\n$truncated"
+                        _documentLog.value = null
+                        _ocrLog.value = null
+                        _audioLog.value = truncated
+                    }
                 }
                 return@launch
             }
 
-            // Video: frame OCR only
+            // Video: frame OCR + optional Vosk audio transcription
             if (isVideo) {
                 val ocrText = try {
                     app.pocketmonk.util.DocumentTextExtractor.extractFromVideo(ctx, uri)
@@ -798,17 +872,57 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     return@launch
                 }
+                if (ocrText.isNotBlank()) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        _documentName.value = name
+                        _ocrLog.value = ocrText.take(8000)
+                    }
+                }
+                val audioLang = voskService.bestAvailableLanguage(_voskLanguage.value)
+                val audioText = if (audioLang != null) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        _isTranscribing.value = true
+                        _transcriptionProgress.value = 0f
+                    }
+                    try {
+                        voskService.transcribeUri(
+                            uri,
+                            language = audioLang,
+                            onProgress = { progress ->
+                                viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                    _transcriptionProgress.value = progress.coerceIn(0f, 1f)
+                                }
+                            },
+                            onPartialResult = { partial ->
+                                viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                    _audioLog.value = partial.take(8000)
+                                }
+                            },
+                        )
+                    } catch (_: Throwable) { "" }
+                    .also {
+                        withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            _isTranscribing.value = false
+                            _transcriptionProgress.value = 0f
+                        }
+                    }
+                } else ""
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    if (ocrText.isBlank()) {
-                        _errorMessage.value = "No text found in \"$name\"."
+                    val combined = buildString {
+                        if (ocrText.isNotBlank()) { append("On-screen text (OCR):\n"); append(ocrText) }
+                        if (audioText.isNotBlank()) { if (isNotEmpty()) append("\n\n"); append("Audio transcript:\n"); append(audioText) }
+                    }
+                    if (combined.isBlank()) {
+                        _errorMessage.value = "No text or speech found in \"$name\"."
                         _documentName.value = null
                         _ocrLog.value = null
+                        _audioLog.value = null
                     } else {
                         _documentName.value = name
-                        _documentContent.value = "On-screen text (OCR):\n${ocrText.take(8000)}"
+                        _documentContent.value = combined.take(8000)
                         _documentLog.value = null
-                        _ocrLog.value = ocrText.take(8000)
-                        _audioLog.value = null
+                        _ocrLog.value = ocrText.take(8000).takeIf { it.isNotBlank() }
+                        _audioLog.value = audioText.take(8000).takeIf { it.isNotBlank() }
                     }
                 }
                 return@launch
@@ -989,6 +1103,62 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteModel(entry: ModelEntry) {
         modelManager.deleteModel(entry)
+    }
+
+    // ── Vosk model download ───────────────────────────────────────────────────
+
+    fun downloadVoskEnModel() {
+        if (_voskEnDownloadState.value is DownloadState.Downloading) return
+        voskEnDownloadJob = viewModelScope.launch {
+            _voskEnDownloadState.value = DownloadState.Downloading("vosk-en", 0f)
+            try {
+                val dir = voskService.downloadEnModel { p ->
+                    _voskEnDownloadState.value = DownloadState.Downloading("vosk-en", p)
+                }
+                _voskEnDownloadState.value = DownloadState.Done(dir.absolutePath)
+            } catch (e: Exception) {
+                _voskEnDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
+            }
+        }
+    }
+
+    fun cancelVoskEnDownload() {
+        voskEnDownloadJob?.cancel(); voskEnDownloadJob = null
+        _voskEnDownloadState.value = DownloadState.Idle
+    }
+
+    fun dismissVoskEnError() { _voskEnDownloadState.value = DownloadState.Idle }
+
+    fun deleteVoskEnModel() {
+        voskService.deleteEnModel()
+        _voskEnDownloadState.value = DownloadState.Idle
+    }
+
+    fun downloadVoskFrModel() {
+        if (_voskFrDownloadState.value is DownloadState.Downloading) return
+        voskFrDownloadJob = viewModelScope.launch {
+            _voskFrDownloadState.value = DownloadState.Downloading("vosk-fr", 0f)
+            try {
+                val dir = voskService.downloadFrModel { p ->
+                    _voskFrDownloadState.value = DownloadState.Downloading("vosk-fr", p)
+                }
+                _voskFrDownloadState.value = DownloadState.Done(dir.absolutePath)
+            } catch (e: Exception) {
+                _voskFrDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
+            }
+        }
+    }
+
+    fun cancelVoskFrDownload() {
+        voskFrDownloadJob?.cancel(); voskFrDownloadJob = null
+        _voskFrDownloadState.value = DownloadState.Idle
+    }
+
+    fun dismissVoskFrError() { _voskFrDownloadState.value = DownloadState.Idle }
+
+    fun deleteVoskFrModel() {
+        voskService.deleteFrModel()
+        _voskFrDownloadState.value = DownloadState.Idle
     }
 
     fun useLocalModel(path: String) {

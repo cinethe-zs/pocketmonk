@@ -39,7 +39,10 @@ fun ModelSetupScreen(
     viewModel: ChatViewModel,
     onModelReady: (String) -> Unit,
 ) {
-    val downloadState by viewModel.downloadState.collectAsState()
+    val downloadState       by viewModel.downloadState.collectAsState()
+    val voskEnDownloadState by viewModel.voskEnDownloadState.collectAsState()
+    val voskFrDownloadState by viewModel.voskFrDownloadState.collectAsState()
+    val voskLanguage        by viewModel.voskLanguage.collectAsState()
     val manager = viewModel.modelManager
 
     // Reset Done state so re-opening this screen doesn't instantly navigate away
@@ -289,7 +292,245 @@ fun ModelSetupScreen(
                 }
             }
 
+            // ── Speech Recognition section ────────────────────────────────
+            item {
+                Text(
+                    text = "Speech Recognition",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp, bottom = 6.dp),
+                )
+            }
+            item {
+                VoskModelCard(
+                    modelName      = "English — Small",
+                    modelDesc      = "Fast on-device speech recognition for English audio and video files.",
+                    modelSize      = "~40 MB",
+                    isDownloaded   = viewModel.voskService.isEnModelDownloaded(),
+                    downloadState  = voskEnDownloadState,
+                    onDownload     = { viewModel.downloadVoskEnModel() },
+                    onCancel       = { viewModel.cancelVoskEnDownload() },
+                    onDelete       = { viewModel.deleteVoskEnModel() },
+                    onDismissError = { viewModel.dismissVoskEnError() },
+                )
+            }
+            item {
+                Spacer(Modifier.height(6.dp))
+                VoskModelCard(
+                    modelName      = "French — Small",
+                    modelDesc      = "Reconnaissance vocale rapide en français pour les fichiers audio et vidéo.",
+                    modelSize      = "~41 MB",
+                    isDownloaded   = viewModel.voskService.isFrModelDownloaded(),
+                    downloadState  = voskFrDownloadState,
+                    onDownload     = { viewModel.downloadVoskFrModel() },
+                    onCancel       = { viewModel.cancelVoskFrDownload() },
+                    onDelete       = { viewModel.deleteVoskFrModel() },
+                    onDismissError = { viewModel.dismissVoskFrError() },
+                )
+            }
+
+            // Language preference (shown only when at least one model is downloaded)
+            if (viewModel.voskService.isAnyModelDownloaded()) {
+                item {
+                    Spacer(Modifier.height(10.dp))
+                    VoskLanguageCard(
+                        selected        = voskLanguage,
+                        hasEnModel      = viewModel.voskService.isEnModelDownloaded(),
+                        hasFrModel      = viewModel.voskService.isFrModelDownloaded(),
+                        onSelectLanguage = { viewModel.setVoskLanguage(it) },
+                    )
+                }
+            }
+
             item { Spacer(Modifier.height(32.dp)) }
+        }
+    }
+}
+
+// ── Vosk model card ────────────────────────────────────────────────────────────
+
+@Composable
+private fun VoskModelCard(
+    modelName: String,
+    modelDesc: String,
+    modelSize: String,
+    isDownloaded: Boolean,
+    downloadState: DownloadState,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+    onDismissError: () -> Unit,
+) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete model?", color = TextPrimary) },
+            text = { Text("$modelName will be removed from the device.", color = TextMuted, fontSize = 13.sp) },
+            confirmButton = {
+                TextButton(onClick = { showDeleteConfirm = false; onDelete() }) {
+                    Text("Delete", color = Error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = TextSecondary) }
+            },
+            containerColor = Surface,
+        )
+    }
+
+    val isDownloading = downloadState is DownloadState.Downloading
+    val progress = if (isDownloading) (downloadState as DownloadState.Downloading).progress else 0f
+    val isError = downloadState is DownloadState.Error
+    val isExtracting = isDownloading && progress >= 0.9f
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface)
+            .border(1.dp, if (isDownloaded) Success.copy(alpha = 0.4f) else Border, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(modelName, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(modelDesc, color = TextMuted, fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 2.dp), lineHeight = 16.sp)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(modelSize, color = TextMuted, fontSize = 11.sp)
+        }
+
+        if (isError) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                    .background(Error.copy(alpha = 0.12f)).padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.ErrorOutline, null, tint = Error, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text((downloadState as DownloadState.Error).message, color = Error, fontSize = 11.sp,
+                    modifier = Modifier.weight(1f))
+                IconButton(onClick = onDismissError, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Rounded.Close, null, tint = Error, modifier = Modifier.size(14.dp))
+                }
+            }
+        }
+
+        AnimatedVisibility(visible = isDownloading) {
+            Column(modifier = Modifier.padding(top = 10.dp)) {
+                if (progress < 0f) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)), color = Accent, trackColor = Border)
+                } else {
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth()
+                        .height(4.dp).clip(RoundedCornerShape(2.dp)), color = Accent, trackColor = Border)
+                }
+                Text(
+                    text = when {
+                        progress < 0f   -> "Connecting…"
+                        isExtracting    -> "Extracting…"
+                        else            -> "${"%.0f".format(progress * 100)}%"
+                    },
+                    color = TextMuted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+            when {
+                isDownloading -> OutlinedButton(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Error),
+                    border = ButtonDefaults.outlinedButtonBorder.copy(brush = SolidColor(Error.copy(alpha = 0.5f))),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                ) { Text("Cancel", fontSize = 12.sp) }
+
+                isDownloaded -> {
+                    IconButton(onClick = { showDeleteConfirm = true }, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Rounded.DeleteOutline, contentDescription = "Delete",
+                            tint = Error, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Box(
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp))
+                            .background(Success.copy(alpha = 0.15f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.CheckCircle, null, tint = Success, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Ready", color = Success, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                else -> Button(
+                    onClick = onDownload,
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent, disabledContainerColor = Border),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Rounded.Download, null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Download", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+// ── Vosk language card ─────────────────────────────────────────────────────────
+
+@Composable
+private fun VoskLanguageCard(
+    selected: String,
+    hasEnModel: Boolean,
+    hasFrModel: Boolean,
+    onSelectLanguage: (String) -> Unit,
+) {
+    val langs = buildList {
+        if (hasEnModel) add("en" to "English")
+        if (hasFrModel) add("fr" to "French")
+    }
+    if (langs.size < 2) return  // nothing to choose if only one model
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface)
+            .border(1.dp, Border, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("Transcription language", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            langs.forEach { (code, label) ->
+                val sel = selected == code
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (sel) Accent else Surface)
+                        .border(1.dp, if (sel) Accent else Border, RoundedCornerShape(8.dp))
+                        .clickable { onSelectLanguage(code) }
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                ) {
+                    Text(label,
+                        color = if (sel) Background else TextPrimary,
+                        fontSize = 13.sp,
+                        fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal)
+                }
+            }
         }
     }
 }

@@ -12,8 +12,8 @@ android {
         applicationId = "app.pocketmonk"
         minSdk = 28
         targetSdk = 36
-        versionCode = 88
-        versionName = "3.23.0"
+        versionCode = 89
+        versionName = "3.24.0"
 
     }
 
@@ -78,5 +78,6 @@ dependencies {
     implementation(libs.mlkit.text.recognition)
     implementation(libs.poi)
     implementation(libs.poi.scratchpad)
+    implementation(libs.vosk)
     debugImplementation(libs.compose.ui.tooling)
 }
