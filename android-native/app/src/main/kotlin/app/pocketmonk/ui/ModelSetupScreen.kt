@@ -39,6 +39,7 @@ fun ModelSetupScreen(
     onModelReady: (String) -> Unit,
 ) {
     val downloadState by viewModel.downloadState.collectAsState()
+    val whisperTinyDownloadState by viewModel.whisperTinyDownloadState.collectAsState()
     val whisperDownloadState by viewModel.whisperDownloadState.collectAsState()
     val manager = viewModel.modelManager
 
@@ -303,12 +304,29 @@ fun ModelSetupScreen(
             }
             item {
                 WhisperModelCard(
-                    isDownloaded       = viewModel.whisperService.isModelDownloaded(),
-                    downloadState      = whisperDownloadState,
-                    onDownload         = { viewModel.downloadWhisperModel() },
-                    onCancel           = { viewModel.cancelWhisperDownload() },
-                    onDelete           = { viewModel.deleteWhisperModel() },
-                    onDismissError     = { viewModel.dismissWhisperDownloadError() },
+                    modelName      = "Whisper Tiny (Q5) — Fast",
+                    modelDesc      = "4× faster than Base. Recommended for most uses.",
+                    modelSize      = "~31 MB",
+                    isDownloaded   = viewModel.whisperService.isTinyModelDownloaded(),
+                    downloadState  = whisperTinyDownloadState,
+                    onDownload     = { viewModel.downloadWhisperTinyModel() },
+                    onCancel       = { viewModel.cancelWhisperTinyDownload() },
+                    onDelete       = { viewModel.deleteWhisperTinyModel() },
+                    onDismissError = { viewModel.dismissWhisperTinyDownloadError() },
+                )
+            }
+            item {
+                Spacer(Modifier.height(6.dp))
+                WhisperModelCard(
+                    modelName      = "Whisper Base (Q5) — Quality",
+                    modelDesc      = "More accurate but ~4× slower than Tiny.",
+                    modelSize      = "~57 MB",
+                    isDownloaded   = viewModel.whisperService.isBaseModelDownloaded(),
+                    downloadState  = whisperDownloadState,
+                    onDownload     = { viewModel.downloadWhisperModel() },
+                    onCancel       = { viewModel.cancelWhisperDownload() },
+                    onDelete       = { viewModel.deleteWhisperModel() },
+                    onDismissError = { viewModel.dismissWhisperDownloadError() },
                 )
             }
 
@@ -535,6 +553,9 @@ private fun LocalFileCard(file: File, onUse: () -> Unit, onDelete: () -> Unit) {
 
 @Composable
 private fun WhisperModelCard(
+    modelName: String,
+    modelDesc: String,
+    modelSize: String,
     isDownloaded: Boolean,
     downloadState: DownloadState,
     onDownload: () -> Unit,
@@ -547,10 +568,10 @@ private fun WhisperModelCard(
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete Whisper model?", color = TextPrimary) },
+            title = { Text("Delete model?", color = TextPrimary) },
             text = {
                 Text(
-                    "${WhisperService.MODEL_FILENAME} will be removed from the device.",
+                    "$modelName will be removed from the device.",
                     color = TextMuted, fontSize = 13.sp
                 )
             },
@@ -587,17 +608,17 @@ private fun WhisperModelCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Whisper Base (Q5)",
+                    modelName,
                     color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    "On-device speech recognition — EN, FR, ES, DE, RU, ZH and more.",
+                    modelDesc,
                     color = TextMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp),
                     lineHeight = 16.sp,
                 )
             }
             Spacer(Modifier.width(8.dp))
-            Text("~57 MB", color = TextMuted, fontSize = 11.sp)
+            Text(modelSize, color = TextMuted, fontSize = 11.sp)
         }
 
         if (isError) {

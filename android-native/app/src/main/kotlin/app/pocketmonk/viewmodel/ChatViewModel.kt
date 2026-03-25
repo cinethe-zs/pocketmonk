@@ -42,6 +42,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var downloadJob: Job? = null
 
+    private val _whisperTinyDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val whisperTinyDownloadState: StateFlow<DownloadState> = _whisperTinyDownloadState.asStateFlow()
+
+    private var whisperTinyDownloadJob: Job? = null
+
     private val _whisperDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
     val whisperDownloadState: StateFlow<DownloadState> = _whisperDownloadState.asStateFlow()
 
@@ -1064,6 +1069,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ── Whisper model download ─────────────────────────────────────────────────
+
+    fun downloadWhisperTinyModel() {
+        if (_whisperTinyDownloadState.value is DownloadState.Downloading) return
+        whisperTinyDownloadJob = viewModelScope.launch {
+            _whisperTinyDownloadState.value = DownloadState.Downloading("whisper-tiny", 0f)
+            try {
+                val file = whisperService.downloadTinyModel { progress ->
+                    _whisperTinyDownloadState.value = DownloadState.Downloading("whisper-tiny", progress)
+                }
+                _whisperTinyDownloadState.value = DownloadState.Done(file.absolutePath)
+            } catch (e: Exception) {
+                _whisperTinyDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
+            }
+        }
+    }
+
+    fun cancelWhisperTinyDownload() {
+        whisperTinyDownloadJob?.cancel()
+        whisperTinyDownloadJob = null
+        _whisperTinyDownloadState.value = DownloadState.Idle
+    }
+
+    fun dismissWhisperTinyDownloadError() {
+        _whisperTinyDownloadState.value = DownloadState.Idle
+    }
+
+    fun deleteWhisperTinyModel() {
+        whisperService.releaseModel()
+        whisperService.tinyModelFile().delete()
+        _whisperTinyDownloadState.value = DownloadState.Idle
+    }
 
     fun downloadWhisperModel() {
         if (_whisperDownloadState.value is DownloadState.Downloading) return

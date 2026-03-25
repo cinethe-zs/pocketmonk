@@ -18,9 +18,17 @@ import kotlin.coroutines.coroutineContext
 class WhisperService(private val context: Context) {
 
     companion object {
-        const val MODEL_FILENAME = "ggml-base-q5_1.bin"
-        const val MODEL_URL =
+        const val TINY_MODEL_FILENAME = "ggml-tiny-q5_1.bin"
+        const val TINY_MODEL_URL =
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin"
+
+        const val BASE_MODEL_FILENAME = "ggml-base-q5_1.bin"
+        const val BASE_MODEL_URL =
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin"
+
+        // Legacy alias kept for ViewModel back-compat
+        const val MODEL_FILENAME = BASE_MODEL_FILENAME
+        const val MODEL_URL = BASE_MODEL_URL
 
         /** Maximum audio duration fed to whisper (5 minutes → avoid OOM). */
         private const val MAX_AUDIO_SEC = 5 * 60
@@ -49,29 +57,41 @@ class WhisperService(private val context: Context) {
         .build()
 
     private var modelHandle = 0L
+    private var loadedModelPath: String? = null
 
     // ── File helpers ────────────────────────────────────────────────────────
 
-    fun modelFile(): File {
+    private fun modelsDir(): File {
         val dir = context.getExternalFilesDir(null)
             ?.let { File(it, "models") }
             ?: File(context.filesDir, "models")
         if (!dir.exists()) dir.mkdirs()
-        return File(dir, MODEL_FILENAME)
+        return dir
     }
 
-    fun isModelDownloaded(): Boolean {
-        val f = modelFile()
-        return f.exists() && f.length() > 1_000_000L
-    }
+    fun tinyModelFile(): File = File(modelsDir(), TINY_MODEL_FILENAME)
+    fun modelFile(): File = File(modelsDir(), BASE_MODEL_FILENAME)  // base = legacy
+
+    fun isTinyModelDownloaded(): Boolean = tinyModelFile().let { it.exists() && it.length() > 500_000L }
+    fun isBaseModelDownloaded(): Boolean = modelFile().let { it.exists() && it.length() > 1_000_000L }
+
+    /** True if any Whisper model is available for transcription. */
+    fun isModelDownloaded(): Boolean = isTinyModelDownloaded() || isBaseModelDownloaded()
 
     // ── Model lifecycle ─────────────────────────────────────────────────────
 
+    /** Loads the best available model (tiny preferred). Returns false if none available. */
     fun loadModel(): Boolean {
-        if (modelHandle != 0L) return true
-        val f = modelFile()
-        if (!f.exists()) return false
-        modelHandle = nativeLoadModel(f.absolutePath)
+        val target = when {
+            isTinyModelDownloaded() -> tinyModelFile()
+            isBaseModelDownloaded() -> modelFile()
+            else -> return false
+        }
+        if (modelHandle != 0L && loadedModelPath == target.absolutePath) return true
+        // Model changed or not yet loaded — (re)load.
+        if (modelHandle != 0L) { nativeFreeModel(modelHandle); modelHandle = 0L; loadedModelPath = null }
+        modelHandle = nativeLoadModel(target.absolutePath)
+        if (modelHandle != 0L) loadedModelPath = target.absolutePath
         return modelHandle != 0L
     }
 
@@ -79,47 +99,47 @@ class WhisperService(private val context: Context) {
         if (modelHandle != 0L) {
             nativeFreeModel(modelHandle)
             modelHandle = 0L
+            loadedModelPath = null
         }
     }
 
     // ── Download ────────────────────────────────────────────────────────────
 
-    /**
-     * Downloads the Whisper model (~57 MB) from HuggingFace (public, no token needed).
-     * Reports progress in [0..1] via [onProgress]. Cooperative cancellation.
-     */
-    suspend fun downloadModel(onProgress: (Float) -> Unit): File =
+    private suspend fun downloadFile(url: String, dest: File, onProgress: (Float) -> Unit) =
         withContext(Dispatchers.IO) {
-            val file = modelFile()
-            val request = Request.Builder().url(MODEL_URL).build()
+            val request = Request.Builder().url(url).build()
             val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                response.close()
-                throw Exception("Download failed: HTTP ${response.code}")
-            }
-            val body = response.body ?: run {
-                response.close()
-                throw Exception("Empty response body")
-            }
+            if (!response.isSuccessful) { response.close(); throw Exception("Download failed: HTTP ${response.code}") }
+            val body = response.body ?: run { response.close(); throw Exception("Empty response body") }
             val total = body.contentLength()
             var received = 0L
             body.byteStream().use { input ->
-                file.outputStream().use { output ->
+                dest.outputStream().use { output ->
                     val buf = ByteArray(65_536)
                     var read: Int
                     while (input.read(buf).also { read = it } != -1) {
-                        if (!coroutineContext.isActive) {
-                            file.delete()
-                            throw Exception("Cancelled")
-                        }
+                        if (!coroutineContext.isActive) { dest.delete(); throw Exception("Cancelled") }
                         output.write(buf, 0, read)
                         received += read
                         if (total > 0) onProgress(received.toFloat() / total)
                     }
                 }
             }
-            file
         }
+
+    /** Downloads the Tiny Whisper model (~31 MB). Cooperative cancellation. */
+    suspend fun downloadTinyModel(onProgress: (Float) -> Unit): File {
+        val f = tinyModelFile()
+        downloadFile(TINY_MODEL_URL, f, onProgress)
+        return f
+    }
+
+    /** Downloads the Base Whisper model (~57 MB). Cooperative cancellation. */
+    suspend fun downloadModel(onProgress: (Float) -> Unit): File {
+        val f = modelFile()
+        downloadFile(BASE_MODEL_URL, f, onProgress)
+        return f
+    }
 
     // ── Transcription ───────────────────────────────────────────────────────
 
