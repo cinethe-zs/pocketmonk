@@ -180,9 +180,12 @@ class LlmService(private val context: Context) {
                         override fun onDone() {
                             mainHandler.removeCallbacks(watchdog)
                             mainHandler.post {
+                                // Close conversation immediately so nativeDeleteConversation()
+                                // has maximum time to complete before the next createConversation().
+                                val conv = currentConversation
+                                currentConversation = null
+                                try { conv?.close() } catch (_: Exception) {}
                                 isInferring = false
-                                // Keep conversation alive — close it at the start of the next
-                                // chat() call once the native async delete has had time to finish.
                                 onDone()
                             }
                         }
@@ -190,6 +193,9 @@ class LlmService(private val context: Context) {
                         override fun onError(throwable: Throwable) {
                             mainHandler.removeCallbacks(watchdog)
                             mainHandler.post {
+                                val conv = currentConversation
+                                currentConversation = null
+                                try { conv?.close() } catch (_: Exception) {}
                                 isInferring = false
                                 if (throwable is CancellationException) onDone()
                                 else onErrorOuter(throwable.message ?: "Unknown error during inference")
