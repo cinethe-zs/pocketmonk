@@ -32,7 +32,8 @@ object DocumentTextExtractor {
         "jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tiff", "tif"
     )
     private val VIDEO_EXTS   = setOf(
-        "mp4", "mkv", "avi", "mov", "webm", "3gp", "flv", "ts", "m4v", "wmv"
+        "mp4", "mkv", "avi", "mov", "webm", "3gp", "flv", "ts", "m4v", "wmv",
+        "mts", "m2ts", "vob", "ogv", "rm", "rmvb", "asf", "divx"
     )
     private val AUDIO_EXTS   = setOf(
         "mp3", "m4a", "aac", "ogg", "flac", "wav", "opus", "wma", "aiff", "aif"
