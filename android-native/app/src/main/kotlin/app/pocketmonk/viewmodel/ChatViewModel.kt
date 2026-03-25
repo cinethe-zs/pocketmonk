@@ -755,16 +755,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
-            val content = app.pocketmonk.util.DocumentTextExtractor.extract(bytes, mimeType, name)
+            val ext = name.substringAfterLast('.', "").lowercase()
+            val isImage = app.pocketmonk.util.DocumentTextExtractor.isImage(mimeType, ext)
+            val content: String? = if (isImage) {
+                app.pocketmonk.util.DocumentTextExtractor.extractFromImage(bytes)
+                    .let { if (it.isBlank()) "" else "Text extracted from image (OCR):\n$it" }
+            } else {
+                app.pocketmonk.util.DocumentTextExtractor.extract(bytes, mimeType, name)
+            }
             withContext(kotlinx.coroutines.Dispatchers.Main) {
                 when {
-                    content == null -> {
-                        val ext = name.substringAfterLast('.', "").lowercase()
+                    content == null ->
                         _errorMessage.value = ".$ext files are not supported. Save as .pdf or .docx instead."
-                    }
-                    content.isBlank() -> {
-                        _errorMessage.value = "\"$name\" appears to be empty or has no readable text."
-                    }
+                    content.isBlank() ->
+                        _errorMessage.value = if (isImage)
+                            "No readable text found in \"$name\"."
+                        else
+                            "\"$name\" appears to be empty or has no readable text."
                     else -> loadDocument(name, content)
                 }
             }

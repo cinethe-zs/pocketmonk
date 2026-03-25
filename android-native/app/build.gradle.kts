@@ -12,8 +12,8 @@ android {
         applicationId = "app.pocketmonk"
         minSdk = 28
         targetSdk = 36
-        versionCode = 65
-        versionName = "3.11.0"
+        versionCode = 66
+        versionName = "3.11.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -78,5 +78,6 @@ dependencies {
     implementation(libs.core.ktx)
     implementation(libs.appcompat)
     implementation(libs.pdfbox.android)
+    implementation(libs.mlkit.text.recognition)
     debugImplementation(libs.compose.ui.tooling)
 }
