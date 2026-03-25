@@ -147,15 +147,19 @@ object DocumentTextExtractor {
     // --- OCR shared helper ----------------------------------------------------------
 
     private suspend fun ocrBitmap(bitmap: Bitmap): String {
-        val image = InputImage.fromBitmap(bitmap, 0)
-        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-        return suspendCancellableCoroutine { cont ->
-            recognizer.process(image)
-                .addOnSuccessListener { result -> cont.resume(result.text.trim()) }
-                .addOnFailureListener  { cont.resume("") }
-                .addOnCompleteListener { recognizer.close() }
-            cont.invokeOnCancellation { recognizer.close() }
+        for (degrees in listOf(0, 90, 180, 270)) {
+            val image = InputImage.fromBitmap(bitmap, degrees)
+            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            val text = suspendCancellableCoroutine<String> { cont ->
+                recognizer.process(image)
+                    .addOnSuccessListener { result -> cont.resume(result.text.trim()) }
+                    .addOnFailureListener  { cont.resume("") }
+                    .addOnCompleteListener { recognizer.close() }
+                cont.invokeOnCancellation { recognizer.close() }
+            }
+            if (text.isNotBlank()) return text
         }
+        return ""
     }
 
     // --- Modern Office XML / ODF (ZIP+XML) ------------------------------------------
