@@ -94,18 +94,17 @@ class LlmService(private val context: Context) {
 
         val onErrorOuter = onError
 
-        // Grab and clear the stale conversation reference before starting the thread
-        // so that cancel() called during setup sees null and won't try to double-close.
+        // Close the stale conversation immediately on the calling thread.
+        // Doing it here (before the background Thread starts) gives the native async
+        // delete maximum lead time to complete before createConversation() is attempted.
         val staleConv = currentConversation
         currentConversation = null
+        try { staleConv?.cancelProcess() } catch (_: Exception) {}
+        try { staleConv?.close() } catch (_: Exception) {}
 
-        // Run the entire setup (close + createConversation) on a background thread.
-        // This allows Thread.sleep() retries without blocking the main thread, and
-        // avoids the FAILED_PRECONDITION race where nativeDeleteConversation's async
-        // cleanup hasn't finished before createConversation is called.
         Thread {
             try {
-                // Build config before acquiring the lock (pure computation, no native calls).
+                // Build config (pure computation, no native calls).
                 val effectiveTemp = if (temperature < 0.1f) 1.0f else temperature
                 val sysText = buildString {
                     if (!systemPrompt.isNullOrBlank()) append(systemPrompt)
@@ -125,24 +124,28 @@ class LlmService(private val context: Context) {
 
                 // Acquire the engine lock: blocks until any active runSession() (title generation,
                 // summarization, web search helpers) has fully closed its Session.
-                // This prevents FAILED_PRECONDITION "a session already exists".
+                // Inside the lock, retry createConversation to handle the case where the native
+                // async delete of the stale conversation hasn't completed yet.
                 engineLock.lock()
                 var conversation: com.google.ai.edge.litertlm.Conversation? = null
-                var convException: Exception? = null
+                var lastEx: Exception? = null
                 try {
-                    try { staleConv?.cancelProcess() } catch (_: Exception) {}
-                    try { staleConv?.close() } catch (_: Exception) {}
-                    try {
-                        conversation = eng.createConversation(config)
-                    } catch (e: Exception) {
-                        convException = e
+                    for (attempt in 0..4) {
+                        if (attempt > 0) Thread.sleep(100L * attempt)
+                        try {
+                            conversation = eng.createConversation(config)
+                            break
+                        } catch (e: Exception) {
+                            lastEx = e
+                            if (e.message?.contains("FAILED_PRECONDITION", ignoreCase = true) != true) break
+                        }
                     }
                 } finally {
                     engineLock.unlock()
                 }
 
                 if (conversation == null) {
-                    val msg = convException?.message ?: "Failed to create conversation"
+                    val msg = lastEx?.message ?: "Failed to create conversation"
                     mainHandler.post { isInferring = false; onErrorOuter(msg) }
                     return@Thread
                 }
