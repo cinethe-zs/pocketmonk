@@ -836,15 +836,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _transcriptionProgress.value = 0f
                 }
                 val transcript = try {
-                    whisperService.transcribeUri(uri, _whisperLanguage.value, _whisperModelPref.value) { progress ->
-                        viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                            _transcriptionProgress.value = progress
-                        }
-                    }
+                    whisperService.transcribeUri(
+                        uri,
+                        language  = _whisperLanguage.value,
+                        modelPref = _whisperModelPref.value,
+                        onProgress = { progress ->
+                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                _transcriptionProgress.value = progress
+                            }
+                        },
+                        onPartialResult = { partial ->
+                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                if (_documentName.value == null) _documentName.value = name
+                                _audioLog.value = partial.take(8000)
+                            }
+                        },
+                    )
                 } catch (e: Throwable) {
                     withContext(kotlinx.coroutines.Dispatchers.Main) {
                         _isTranscribing.value = false
                         _transcriptionProgress.value = 0f
+                        _documentName.value = null
+                        _audioLog.value = null
                         _errorMessage.value = "Failed to transcribe \"$name\": ${e.message}"
                     }
                     return@launch
@@ -853,6 +866,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _isTranscribing.value = false
                     _transcriptionProgress.value = 0f
                     if (transcript.isBlank()) {
+                        _documentName.value = null
+                        _audioLog.value = null
                         _errorMessage.value = "No speech detected in \"$name\"."
                     } else {
                         val truncated = transcript.take(8000)
@@ -876,20 +891,36 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     return@launch
                 }
+                // Show OCR result immediately — don't wait for audio transcription.
+                if (ocrText.isNotBlank()) {
+                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        _documentName.value = name
+                        _ocrLog.value = ocrText.take(8000)
+                    }
+                }
                 val audioText = if (whisperService.isModelDownloaded()) {
                     withContext(kotlinx.coroutines.Dispatchers.Main) {
                         _isTranscribing.value = true
                         _transcriptionProgress.value = 0f
                     }
                     try {
-                        whisperService.transcribeUri(uri, _whisperLanguage.value, _whisperModelPref.value) { progress ->
-                            viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                _transcriptionProgress.value = progress
-                            }
-                        }
-                    } catch (_: Throwable) {
-                        ""
-                    }.also {
+                        whisperService.transcribeUri(
+                            uri,
+                            language  = _whisperLanguage.value,
+                            modelPref = _whisperModelPref.value,
+                            onProgress = { progress ->
+                                viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                    _transcriptionProgress.value = progress
+                                }
+                            },
+                            onPartialResult = { partial ->
+                                viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                    _audioLog.value = partial.take(8000)
+                                }
+                            },
+                        )
+                    } catch (_: Throwable) { "" }
+                    .also {
                         withContext(kotlinx.coroutines.Dispatchers.Main) {
                             _isTranscribing.value = false
                             _transcriptionProgress.value = 0f
@@ -898,18 +929,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } else ""
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                     val combined = buildString {
-                        if (ocrText.isNotBlank()) {
-                            append("On-screen text (OCR):\n")
-                            append(ocrText)
-                        }
-                        if (audioText.isNotBlank()) {
-                            if (isNotEmpty()) append("\n\n")
-                            append("Audio transcript:\n")
-                            append(audioText)
-                        }
+                        if (ocrText.isNotBlank()) { append("On-screen text (OCR):\n"); append(ocrText) }
+                        if (audioText.isNotBlank()) { if (isNotEmpty()) append("\n\n"); append("Audio transcript:\n"); append(audioText) }
                     }
                     if (combined.isBlank()) {
                         _errorMessage.value = "No text or speech found in \"$name\"."
+                        _documentName.value = null
+                        _ocrLog.value = null
+                        _audioLog.value = null
                     } else {
                         _documentName.value = name
                         _documentContent.value = combined.take(8000)

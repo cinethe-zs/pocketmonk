@@ -6,8 +6,12 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicInteger
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -43,6 +47,8 @@ class WhisperService(private val context: Context) {
         /** Maximum audio duration fed to whisper (5 minutes → avoid OOM). */
         private const val MAX_AUDIO_SEC = 5 * 60
         private const val WHISPER_SAMPLE_RATE = 16_000
+        /** Samples per parallel chunk (30 s at 16 kHz). */
+        private const val CHUNK_SAMPLES = WHISPER_SAMPLE_RATE * 30
 
         /** Called from C++ with values 0–100 during whisper_full. */
         fun interface ProgressCallback {
@@ -55,9 +61,15 @@ class WhisperService(private val context: Context) {
 
         @JvmStatic external fun nativeLoadModel(modelPath: String): Long
         @JvmStatic external fun nativeFreeModel(handle: Long)
+        @JvmStatic external fun nativeInitState(ctxHandle: Long): Long
+        @JvmStatic external fun nativeFreeState(stateHandle: Long)
         @JvmStatic external fun nativeTranscribe(
             handle: Long, samples: FloatArray, language: String,
             progressCallback: ProgressCallback,
+        ): String
+        @JvmStatic external fun nativeTranscribeChunk(
+            ctxHandle: Long, stateHandle: Long,
+            samples: FloatArray, language: String, nThreads: Int,
         ): String
     }
 
@@ -182,22 +194,93 @@ class WhisperService(private val context: Context) {
     // ── Transcription ───────────────────────────────────────────────────────
 
     /**
-     * Transcribes the audio track of [uri].
-     * [language]: two-letter BCP-47 code ("en", "fr", …) or "auto" for auto-detect.
-     * [modelPref]: "auto" | "tiny" | "tiny_en" | "base_en" | "base"
+     * Transcribes the audio track of [uri] using parallel chunk processing.
+     *
+     * The audio is split into 30-second chunks; up to 4 chunks run concurrently
+     * on independent whisper_state objects sharing one loaded model context.
+     * As each chunk completes, [onPartialResult] is called with the accumulated
+     * transcript so far (in original order), enabling live streaming display.
+     * [onProgress] reports 0..1 based on chunks completed.
      */
     suspend fun transcribeUri(
         uri: Uri,
         language: String = "auto",
         modelPref: String = "auto",
         onProgress: (Float) -> Unit = {},
+        onPartialResult: (String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val samples = decodeAudio(uri) ?: return@withContext ""
         if (samples.isEmpty()) return@withContext ""
         if (!loadModel(language, modelPref)) return@withContext ""
-        nativeTranscribe(modelHandle, samples, language) { percent ->
-            onProgress(percent / 100f)
+
+        val totalChunks   = (samples.size + CHUNK_SAMPLES - 1) / CHUNK_SAMPLES
+        val numWorkers    = totalChunks.coerceAtMost(4)
+        val threadsEach   = (8 / numWorkers).coerceAtLeast(2)
+
+        // Split audio into non-overlapping 30-second chunks.
+        val chunks = Array(totalChunks) { i ->
+            val start = i * CHUNK_SAMPLES
+            val end   = (start + CHUNK_SAMPLES).coerceAtMost(samples.size)
+            samples.copyOfRange(start, end)
         }
+
+        val results        = arrayOfNulls<String>(totalChunks)
+        val completed      = AtomicInteger(0)
+        var nextDisplay    = 0
+        val displayLock    = Any()
+        var accumulated    = ""
+
+        // Create one independent whisper_state per worker.
+        val states = LongArray(numWorkers) { nativeInitState(modelHandle) }
+        if (states.any { it == 0L }) {
+            // State creation failed — fall back to single-threaded with progress callback.
+            states.forEach { if (it != 0L) nativeFreeState(it) }
+            return@withContext nativeTranscribe(modelHandle, samples, language) { pct ->
+                onProgress(pct / 100f)
+            }
+        }
+
+        try {
+            val queue = LinkedBlockingQueue<Int>(totalChunks).also { q ->
+                repeat(totalChunks) { q.add(it) }
+            }
+            coroutineScope {
+                repeat(numWorkers) { workerIdx ->
+                    launch(Dispatchers.IO) {
+                        while (true) {
+                            val chunkIdx = queue.poll() ?: break
+                            val text = nativeTranscribeChunk(
+                                modelHandle, states[workerIdx],
+                                chunks[chunkIdx], language, threadsEach,
+                            )
+                            results[chunkIdx] = text
+
+                            val done = completed.incrementAndGet()
+                            onProgress(done.toFloat() / totalChunks)
+
+                            // Emit partial results in chunk order as soon as contiguous
+                            // prefix of results is available.
+                            synchronized(displayLock) {
+                                while (nextDisplay < totalChunks &&
+                                       results[nextDisplay] != null) {
+                                    val chunk = results[nextDisplay]!!
+                                    if (chunk.isNotBlank()) {
+                                        accumulated += if (accumulated.isEmpty()) chunk
+                                                       else " $chunk"
+                                    }
+                                    nextDisplay++
+                                }
+                                if (accumulated.isNotBlank()) onPartialResult(accumulated)
+                            }
+                        }
+                    }
+                }
+            }
+        } finally {
+            states.forEach { if (it != 0L) nativeFreeState(it) }
+        }
+
+        results.joinToString(" ") { it?.trim() ?: "" }.trim()
     }
 
     // ── Audio decoding ──────────────────────────────────────────────────────
