@@ -1,0 +1,15 @@
+title: PocketMonk
+description: Fully offline, private AI assistant for Android
+remote_theme: just-the-docs/just-the-docs
+baseurl: "/pocketmonk"
+url: "https://cinethe-zs.github.io"
+
+color_scheme: dark
+
+nav_sort: order
+
+aux_links:
+  "GitHub":
+    - "https://github.com/cinethe-zs/pocketmonk"
+
+footer_content: "PocketMonk &mdash; no cloud, no tracking, no subscriptions."
