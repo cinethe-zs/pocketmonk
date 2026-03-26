@@ -489,10 +489,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (!sufficientEarly) {
                         appendLog("\n[Stage 1 — Parallel Multi-Query]")
                         withContext(Dispatchers.Main) { _searchStatus.value = "Generating search queries…" }
+                        var rawQueryOutput = ""
                         val subQueries = runCatching {
-                            llmService.generateSearchQueries(query)
+                            llmService.generateSearchQueries(query) { raw -> rawQueryOutput = raw }
                         }.getOrElse { listOf(stage0Query) }.take(3)
-                        appendLog("  ${subQueries.size} queries: ${subQueries.joinToString(" | ") { "\"$it\"" }}")
+                        appendLog("  Raw model output: ${rawQueryOutput.replace("\n", "↵").take(200)}")
+                        appendLog("  ${subQueries.size} queries: ${subQueries.joinToString(" | ")}")
 
                         withContext(Dispatchers.Main) { _searchStatus.value = "Searching (${subQueries.size} parallel)…" }
                         val queryResultPairs = coroutineScope {

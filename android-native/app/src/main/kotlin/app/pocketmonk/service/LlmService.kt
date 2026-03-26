@@ -29,12 +29,12 @@ class LlmService(private val context: Context) {
     private var engine: Engine? = null
     var isReady = false
         private set
-    var isInferring = false
+    @Volatile var isInferring = false
         private set
 
     /** Tracked only for cancellation — either a Conversation or Session. */
-    private var currentConversation: com.google.ai.edge.litertlm.Conversation? = null
-    private var currentSession: Session? = null
+    @Volatile private var currentConversation: com.google.ai.edge.litertlm.Conversation? = null
+    @Volatile private var currentSession: Session? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     /**
@@ -102,8 +102,8 @@ class LlmService(private val context: Context) {
         // delete maximum lead time to complete before createConversation() is attempted.
         val staleConv = currentConversation
         currentConversation = null
-        try { staleConv?.cancelProcess() } catch (_: Exception) {}
-        try { staleConv?.close() } catch (_: Exception) {}
+        try { staleConv?.cancelProcess() } catch (_: Throwable) {}
+        try { staleConv?.close() } catch (_: Throwable) {}
 
         Thread {
             try {
@@ -172,7 +172,7 @@ class LlmService(private val context: Context) {
 
                 // If cancel() was called while we were waiting for the lock, abort cleanly.
                 if (!isInferring) {
-                    try { conversation.close() } catch (_: Exception) {}
+                    try { conversation.close() } catch (_: Throwable) {}
                     return@Thread
                 }
                 currentConversation = conversation
@@ -204,7 +204,7 @@ class LlmService(private val context: Context) {
                                 // has maximum time to complete before the next createConversation().
                                 val conv = currentConversation
                                 currentConversation = null
-                                try { conv?.close() } catch (_: Exception) {}
+                                try { conv?.close() } catch (_: Throwable) {}
                                 isInferring = false
                                 onDone()
                             }
@@ -215,7 +215,7 @@ class LlmService(private val context: Context) {
                             mainHandler.post {
                                 val conv = currentConversation
                                 currentConversation = null
-                                try { conv?.close() } catch (_: Exception) {}
+                                try { conv?.close() } catch (_: Throwable) {}
                                 isInferring = false
                                 if (throwable is CancellationException) onDone()
                                 else onErrorOuter(throwable.message ?: "Unknown error during inference")
@@ -260,7 +260,7 @@ class LlmService(private val context: Context) {
         return@withContext runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned().ifBlank { null } }
     }
 
-    suspend fun generateSearchQueries(question: String): List<String> = withContext(Dispatchers.IO) {
+    suspend fun generateSearchQueries(question: String, onRaw: ((String) -> Unit)? = null): List<String> = withContext(Dispatchers.IO) {
         val eng = engine ?: return@withContext emptyList()
         val prompt = buildString {
             append("<start_of_turn>user\n")
@@ -271,6 +271,7 @@ class LlmService(private val context: Context) {
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
         val raw = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim() } ?: return@withContext emptyList()
+        onRaw?.invoke(raw)
         raw
             .replace("\\n", "\n")
             .replace("\\r", "")
@@ -749,14 +750,14 @@ class LlmService(private val context: Context) {
                     override fun onDone() {
                         mainHandler.removeCallbacks(watchdog)
                         currentSession = null
-                        try { session?.close() } catch (_: Exception) {}
+                        try { session?.close() } catch (_: Throwable) {}
                         shouldCallDone = true
                         latch.countDown()
                     }
                     override fun onError(throwable: Throwable) {
                         mainHandler.removeCallbacks(watchdog)
                         currentSession = null
-                        try { session?.close() } catch (_: Exception) {}
+                        try { session?.close() } catch (_: Throwable) {}
                         // CancellationException = user stopped or watchdog fired.
                         // Use accumulated partial text rather than showing an error.
                         if (throwable is CancellationException) shouldCallDone = true
@@ -768,7 +769,7 @@ class LlmService(private val context: Context) {
                 try { latch.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
             } catch (e: Exception) {
                 currentSession = null
-                try { session?.close() } catch (_: Exception) {}
+                try { session?.close() } catch (_: Throwable) {}
                 callbackError = e.message ?: "Unknown error during inference"
             } finally {
                 isInferring = false
@@ -784,17 +785,17 @@ class LlmService(private val context: Context) {
     fun cancel() {
         isInferring = false
         val conv = currentConversation; currentConversation = null
-        try { conv?.cancelProcess() } catch (_: Exception) {}
-        try { conv?.close() } catch (_: Exception) {}
+        try { conv?.cancelProcess() } catch (_: Throwable) {}
+        try { conv?.close() } catch (_: Throwable) {}
         val sess = currentSession; currentSession = null
-        try { sess?.cancelProcess() } catch (_: Exception) {}
-        try { sess?.close() } catch (_: Exception) {}
+        try { sess?.cancelProcess() } catch (_: Throwable) {}
+        try { sess?.close() } catch (_: Throwable) {}
     }
 
     fun dispose() {
         cancel()
         isReady = false
-        try { engine?.close() } catch (_: Exception) {}
+        try { engine?.close() } catch (_: Throwable) {}
         engine = null
     }
 
@@ -860,7 +861,7 @@ class LlmService(private val context: Context) {
                         if (trimmed != null) {
                             // Loop detected: save clean portion, stop generation
                             preRepetitionResult = trimmed
-                            try { currentSession?.cancelProcess() } catch (_: Exception) {}
+                            try { currentSession?.cancelProcess() } catch (_: Throwable) {}
                             return
                         }
                         onToken(text)
@@ -870,7 +871,7 @@ class LlmService(private val context: Context) {
                     finalResult = (preRepetitionResult ?: accumulated.toString())
                         .trim().cleaned().ifBlank { null }
                     currentSession = null
-                    try { session?.close() } catch (_: Exception) {}
+                    try { session?.close() } catch (_: Throwable) {}
                     latch.countDown()
                 }
                 override fun onError(throwable: Throwable) {
@@ -878,14 +879,14 @@ class LlmService(private val context: Context) {
                     finalResult = (preRepetitionResult ?: accumulated.toString())
                         .trim().cleaned().ifBlank { null }
                     currentSession = null
-                    try { session?.close() } catch (_: Exception) {}
+                    try { session?.close() } catch (_: Throwable) {}
                     latch.countDown()
                 }
             })
             try { latch.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
             finalResult
         } catch (e: Exception) {
-            try { session?.close() } catch (_: Exception) {}
+            try { session?.close() } catch (_: Throwable) {}
             null
         } finally {
             engineLock.unlock()
@@ -923,10 +924,10 @@ class LlmService(private val context: Context) {
         return try {
             session = eng.createSession()
             val result = block(session)
-            try { session.close() } catch (_: Exception) {}
+            try { session.close() } catch (_: Throwable) {}
             result
         } catch (e: Exception) {
-            try { session?.close() } catch (_: Exception) {}
+            try { session?.close() } catch (_: Throwable) {}
             null
         } finally {
             engineLock.unlock()
