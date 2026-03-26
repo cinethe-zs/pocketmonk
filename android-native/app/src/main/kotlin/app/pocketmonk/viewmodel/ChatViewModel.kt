@@ -41,6 +41,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val downloadState: StateFlow<DownloadState> = _downloadState.asStateFlow()
 
     private var downloadJob: Job? = null
+    private var processingJob: Job? = null
 
     private val voskPrefs =
         application.getSharedPreferences("vosk_prefs", android.content.Context.MODE_PRIVATE)
@@ -220,7 +221,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Long document: classify intent, then stream (TRANSFORM) or map-reduce (ANALYZE)
             _isMapReducing.value = true
             _mapReduceStatus.value = "Classifying request…"
-            viewModelScope.launch {
+            processingJob = viewModelScope.launch {
                 val classification = llmService.classifyIntentLlm(text) { prompt, response ->
                     viewModelScope.launch(Dispatchers.Main) {
                         _classifierLog.value = buildString {
@@ -697,6 +698,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopGeneration() {
+        // Cancel map-reduce/stream processing if running
+        if (_isMapReducing.value) {
+            processingJob?.cancel()
+            processingJob = null
+            llmService.cancel()
+            _isMapReducing.value = false
+            _mapReduceStatus.value = null
+            _isGenerating.value = false
+            _streamingText.value = ""
+            val conv = _currentConversation.value ?: return
+            val lastUser = conv.messages.lastOrNull { it.role == MessageRole.USER && !it.isArchived }
+            if (lastUser != null) {
+                conv.messages.remove(lastUser)
+                _currentConversation.value = conv.copy(messages = conv.messages)
+            }
+            return
+        }
         llmService.cancel()
         _isGenerating.value = false
         val conv = _currentConversation.value ?: return
