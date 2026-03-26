@@ -55,13 +55,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         voskPrefs.edit().putString("language", lang).apply()
     }
 
-    private val _voskEnDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val voskEnDownloadState: StateFlow<DownloadState> = _voskEnDownloadState.asStateFlow()
-    private var voskEnDownloadJob: Job? = null
+    private val _voskSizePref = MutableStateFlow(
+        voskPrefs.getString("size_pref", "small") ?: "small"
+    )
+    val voskSizePref: StateFlow<String> = _voskSizePref.asStateFlow()
 
-    private val _voskFrDownloadState = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val voskFrDownloadState: StateFlow<DownloadState> = _voskFrDownloadState.asStateFlow()
-    private var voskFrDownloadJob: Job? = null
+    fun setVoskSizePref(pref: String) {
+        _voskSizePref.value = pref
+        voskPrefs.edit().putString("size_pref", pref).apply()
+    }
+
+    private val _voskDownloadStates = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
+    val voskDownloadStates: StateFlow<Map<String, DownloadState>> = _voskDownloadStates.asStateFlow()
+    private val voskDownloadJobs = mutableMapOf<String, Job>()
 
     private val _isTranscribing = MutableStateFlow(false)
     val isTranscribing: StateFlow<Boolean> = _isTranscribing.asStateFlow()
@@ -805,7 +811,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // Audio: transcribe via Vosk
             if (isAudio) {
-                val lang = voskService.bestAvailableLanguage(_voskLanguage.value)
+                val lang = voskService.bestModelKey(_voskLanguage.value, _voskSizePref.value)
                 if (lang == null) {
                     withContext(kotlinx.coroutines.Dispatchers.Main) {
                         _errorMessage.value =
@@ -820,7 +826,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val transcript = try {
                     voskService.transcribeUri(
                         uri,
-                        language = lang,
+                        modelKey = lang,
                         onProgress = { progress ->
                             viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
                                 _transcriptionProgress.value = progress.coerceIn(0f, 1f)
@@ -878,7 +884,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _ocrLog.value = ocrText.take(8000)
                     }
                 }
-                val audioLang = voskService.bestAvailableLanguage(_voskLanguage.value)
+                val audioLang = voskService.bestModelKey(_voskLanguage.value, _voskSizePref.value)
                 val audioText = if (audioLang != null) {
                     withContext(kotlinx.coroutines.Dispatchers.Main) {
                         _isTranscribing.value = true
@@ -887,7 +893,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         voskService.transcribeUri(
                             uri,
-                            language = audioLang,
+                            modelKey = audioLang,
                             onProgress = { progress ->
                                 viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
                                     _transcriptionProgress.value = progress.coerceIn(0f, 1f)
@@ -1107,58 +1113,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Vosk model download ───────────────────────────────────────────────────
 
-    fun downloadVoskEnModel() {
-        if (_voskEnDownloadState.value is DownloadState.Downloading) return
-        voskEnDownloadJob = viewModelScope.launch {
-            _voskEnDownloadState.value = DownloadState.Downloading("vosk-en", 0f)
+    fun downloadVoskModel(key: String) {
+        if (_voskDownloadStates.value[key] is DownloadState.Downloading) return
+        voskDownloadJobs[key] = viewModelScope.launch {
+            setVoskState(key, DownloadState.Downloading(key, 0f))
             try {
-                val dir = voskService.downloadEnModel { p ->
-                    _voskEnDownloadState.value = DownloadState.Downloading("vosk-en", p)
-                }
-                _voskEnDownloadState.value = DownloadState.Done(dir.absolutePath)
+                val dir = voskService.download(key) { p -> setVoskState(key, DownloadState.Downloading(key, p)) }
+                setVoskState(key, DownloadState.Done(dir.absolutePath))
             } catch (e: Exception) {
-                _voskEnDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
+                setVoskState(key, DownloadState.Error(e.message ?: "Download failed"))
             }
         }
     }
 
-    fun cancelVoskEnDownload() {
-        voskEnDownloadJob?.cancel(); voskEnDownloadJob = null
-        _voskEnDownloadState.value = DownloadState.Idle
+    fun cancelVoskDownload(key: String) {
+        voskDownloadJobs.remove(key)?.cancel()
+        setVoskState(key, DownloadState.Idle)
     }
 
-    fun dismissVoskEnError() { _voskEnDownloadState.value = DownloadState.Idle }
+    fun dismissVoskError(key: String) { setVoskState(key, DownloadState.Idle) }
 
-    fun deleteVoskEnModel() {
-        voskService.deleteEnModel()
-        _voskEnDownloadState.value = DownloadState.Idle
+    fun deleteVoskModel(key: String) {
+        voskService.delete(key)
+        setVoskState(key, DownloadState.Idle)
     }
 
-    fun downloadVoskFrModel() {
-        if (_voskFrDownloadState.value is DownloadState.Downloading) return
-        voskFrDownloadJob = viewModelScope.launch {
-            _voskFrDownloadState.value = DownloadState.Downloading("vosk-fr", 0f)
-            try {
-                val dir = voskService.downloadFrModel { p ->
-                    _voskFrDownloadState.value = DownloadState.Downloading("vosk-fr", p)
-                }
-                _voskFrDownloadState.value = DownloadState.Done(dir.absolutePath)
-            } catch (e: Exception) {
-                _voskFrDownloadState.value = DownloadState.Error(e.message ?: "Download failed")
-            }
-        }
-    }
-
-    fun cancelVoskFrDownload() {
-        voskFrDownloadJob?.cancel(); voskFrDownloadJob = null
-        _voskFrDownloadState.value = DownloadState.Idle
-    }
-
-    fun dismissVoskFrError() { _voskFrDownloadState.value = DownloadState.Idle }
-
-    fun deleteVoskFrModel() {
-        voskService.deleteFrModel()
-        _voskFrDownloadState.value = DownloadState.Idle
+    private fun setVoskState(key: String, state: DownloadState) {
+        _voskDownloadStates.value = _voskDownloadStates.value + (key to state)
     }
 
     fun useLocalModel(path: String) {
