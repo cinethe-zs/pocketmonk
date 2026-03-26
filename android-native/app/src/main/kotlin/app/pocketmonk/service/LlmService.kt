@@ -416,31 +416,43 @@ class LlmService(private val context: Context) {
         reduced.joinToString("\n\n---\n\n")
     }
 
+    data class IntentResult(val intent: String, val matchedKeyword: String?)
+
     /**
-     * Classifies whether [question] is a TRANSFORM request (translate, rewrite, fix, format)
-     * or an ANALYZE request (summarize, explain, answer, extract).
-     * Returns "TRANSFORM" or "ANALYZE".
+     * Classifies whether [question] is a TRANSFORM request (translate, rewrite, fix, format…)
+     * or an ANALYZE request (summarize, explain, answer, extract…).
+     * Uses keyword matching — deterministic and instant, no LLM call.
+     * Returns [IntentResult] with the intent and the keyword that triggered it (null for ANALYZE).
      */
-    suspend fun classifyIntent(question: String): String = withContext(Dispatchers.IO) {
-        val eng = engine ?: return@withContext "ANALYZE"
-        val prompt = buildString {
-            append("<start_of_turn>user\n")
-            append("Classify the request below as TRANSFORM or ANALYZE. Reply with that single word only.\n\n")
-            append("TRANSFORM = modify or produce new text from the document (translate, rewrite, fix, format, convert, correct, replace, paraphrase, improve style)\n")
-            append("ANALYZE = answer a question or extract information from the document (summarize, explain, what does, find, list, count, who, when, why)\n\n")
-            append("Examples:\n")
-            append("\"translate to French\" -> TRANSFORM\n")
-            append("\"replace all occurrences of X with Y\" -> TRANSFORM\n")
-            append("\"fix the grammar\" -> TRANSFORM\n")
-            append("\"rewrite in a formal tone\" -> TRANSFORM\n")
-            append("\"summarize\" -> ANALYZE\n")
-            append("\"what are the key points?\" -> ANALYZE\n")
-            append("\"who is mentioned?\" -> ANALYZE\n\n")
-            append("Request: \"$question\"\n")
-            append("<end_of_turn>\n<start_of_turn>model\n")
-        }
-        val r = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned().uppercase() }
-        if (r?.contains("TRANSFORM") == true) "TRANSFORM" else "ANALYZE"
+    fun classifyIntent(question: String): IntentResult {
+        val q = question.lowercase()
+        val transformKeywords = listOf(
+            // English
+            "translat", "rewrite", "re-write", "rephrase", "paraphrase",
+            "fix the", "fix grammar", "fix spelling", "fix typo",
+            "correct the", "correct grammar", "correct spelling",
+            "format", "reformat", "convert",
+            "replace ", "replace all", "substitute",
+            "improve the", "improve style", "improve tone",
+            "make it more", "make this more", "make the text",
+            "change the tone", "change the style",
+            "simplify", "formalize",
+            // French
+            "tradui", "traduire", "traduction",
+            "réécri", "réécrire", "reformule", "reformuler",
+            "corrige", "corriger", "correction",
+            "remplace", "remplacer",
+            "formate", "formater",
+            "améliore", "améliorer",
+            "simplifie", "simplifier",
+            // Spanish
+            "traduc",
+            // German
+            "übersetz",
+        )
+        val match = transformKeywords.firstOrNull { q.contains(it) }
+        return if (match != null) IntentResult("TRANSFORM", match.trim())
+               else IntentResult("ANALYZE", null)
     }
 
     /**

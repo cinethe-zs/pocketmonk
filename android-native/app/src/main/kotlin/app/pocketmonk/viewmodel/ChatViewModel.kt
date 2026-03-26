@@ -218,13 +218,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _isMapReducing.value = true
             _mapReduceStatus.value = "Classifying request…"
             viewModelScope.launch {
-                val intent = try {
-                    withContext(Dispatchers.IO) { llmService.classifyIntent(text) }
-                } catch (_: Throwable) { "ANALYZE" }
+                val classification = llmService.classifyIntent(text)
+                val intent = classification.intent
+                val intentLabel = if (classification.matchedKeyword != null)
+                    "TRANSFORM (keyword: \"${classification.matchedKeyword}\")"
+                else "ANALYZE"
 
                 if (intent == "TRANSFORM") {
                     // Stream: apply instruction chunk-by-chunk, concatenate results
-                    withContext(Dispatchers.Main) { _mapReduceStatus.value = "TRANSFORM detected — preparing stream…" }
+                    withContext(Dispatchers.Main) { _mapReduceStatus.value = "$intentLabel — preparing stream…" }
                     val result = try {
                         llmService.streamDocument(docContent, text) { status ->
                             viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
@@ -270,7 +272,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } else {
                     // Map-reduce: extract relevant facts per chunk, then compress
-                    withContext(Dispatchers.Main) { _mapReduceStatus.value = "ANALYZE detected — extracting…" }
+                    withContext(Dispatchers.Main) { _mapReduceStatus.value = "$intentLabel — extracting…" }
                     val synthesis = try {
                         llmService.mapReduceDocument(docContent, text) { status ->
                             viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
