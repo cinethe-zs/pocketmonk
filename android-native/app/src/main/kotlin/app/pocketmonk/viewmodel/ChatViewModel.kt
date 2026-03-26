@@ -924,6 +924,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _documentLog.value = content
         _ocrLog.value = null
         _audioLog.value = null
+        _currentConversation.value?.let { addTag(it, "file") }
     }
 
     fun clearDocument() {
@@ -1018,6 +1019,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _documentLog.value = null
                         _ocrLog.value = null
                         _audioLog.value = transcript
+                        _currentConversation.value?.let { addTag(it, "file") }
                     }
                 }
                 return@launch
@@ -1084,6 +1086,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _documentLog.value = null
                         _ocrLog.value = ocrText.takeIf { it.isNotBlank() }
                         _audioLog.value = audioText.takeIf { it.isNotBlank() }
+                        _currentConversation.value?.let { addTag(it, "file") }
                     }
                 }
                 return@launch
