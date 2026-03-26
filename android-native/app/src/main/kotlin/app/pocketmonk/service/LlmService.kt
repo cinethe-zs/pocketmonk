@@ -425,14 +425,22 @@ class LlmService(private val context: Context) {
         val eng = engine ?: return@withContext "ANALYZE"
         val prompt = buildString {
             append("<start_of_turn>user\n")
-            append("Reply with exactly one word: TRANSFORM or ANALYZE.\n")
-            append("- TRANSFORM: translate, rewrite, fix, format, convert, correct, improve, paraphrase\n")
-            append("- ANALYZE: summarize, explain, answer, extract, find, list, what, why, how\n")
+            append("Classify the request below as TRANSFORM or ANALYZE. Reply with that single word only.\n\n")
+            append("TRANSFORM = modify or produce new text from the document (translate, rewrite, fix, format, convert, correct, replace, paraphrase, improve style)\n")
+            append("ANALYZE = answer a question or extract information from the document (summarize, explain, what does, find, list, count, who, when, why)\n\n")
+            append("Examples:\n")
+            append("\"translate to French\" -> TRANSFORM\n")
+            append("\"replace all occurrences of X with Y\" -> TRANSFORM\n")
+            append("\"fix the grammar\" -> TRANSFORM\n")
+            append("\"rewrite in a formal tone\" -> TRANSFORM\n")
+            append("\"summarize\" -> ANALYZE\n")
+            append("\"what are the key points?\" -> ANALYZE\n")
+            append("\"who is mentioned?\" -> ANALYZE\n\n")
             append("Request: \"$question\"\n")
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
         val r = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned().uppercase() }
-        if (r?.startsWith("TRANSFORM") == true) "TRANSFORM" else "ANALYZE"
+        if (r?.contains("TRANSFORM") == true) "TRANSFORM" else "ANALYZE"
     }
 
     /**
