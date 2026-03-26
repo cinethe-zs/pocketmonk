@@ -244,13 +244,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         llmService.streamDocument(docContent, text) { status ->
                             viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
                         }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Throwable) {
                         withContext(Dispatchers.Main) {
                             _isMapReducing.value = false
                             _mapReduceStatus.value = null
                             _isGenerating.value = false
-                            conv.messages.remove(userMessage)
-                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            val newMsgs = conv.messages.filterNot { it === userMessage }.toMutableList()
+                            _currentConversation.value = conv.copy(messages = newMsgs)
                             _errorMessage.value = "Failed to process document: ${e.message}"
                         }
                         return@launch
@@ -290,13 +292,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         llmService.mapReduceDocument(docContent, text) { status ->
                             viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
                         }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Throwable) {
                         withContext(Dispatchers.Main) {
                             _isMapReducing.value = false
                             _mapReduceStatus.value = null
                             _isGenerating.value = false
-                            conv.messages.remove(userMessage)
-                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            val newMsgs = conv.messages.filterNot { it === userMessage }.toMutableList()
+                            _currentConversation.value = conv.copy(messages = newMsgs)
                             _errorMessage.value = "Failed to analyze document: ${e.message}"
                         }
                         return@launch
@@ -710,8 +714,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val conv = _currentConversation.value ?: return
             val lastUser = conv.messages.lastOrNull { it.role == MessageRole.USER && !it.isArchived }
             if (lastUser != null) {
-                conv.messages.remove(lastUser)
-                _currentConversation.value = conv.copy(messages = conv.messages)
+                val newMessages = conv.messages.filterNot { it === lastUser }.toMutableList()
+                _currentConversation.value = conv.copy(messages = newMessages)
             }
             return
         }
