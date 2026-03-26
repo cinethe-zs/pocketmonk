@@ -391,10 +391,12 @@ class LlmService(private val context: Context) {
             val batches = packIntoBatches(parts, REDUCE_THRESHOLD)
             val compressed = mutableListOf<String>()
             batches.forEachIndexed { i, batch ->
-                val accChars = compressed.sumOf { it.length }
-                onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · $accChars / $REDUCE_THRESHOLD")
+                onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · ${compressed.sumOf { it.length }} / $REDUCE_THRESHOLD")
                 val r = compressBatch(batch)
-                if (r != null) compressed.add(r)
+                if (r != null) {
+                    compressed.add(r)
+                    onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · ${compressed.sumOf { it.length }} / $REDUCE_THRESHOLD")
+                }
             }
             return if (compressed.isEmpty()) listOf(parts.first())
             else reduce(compressed, pass + 1)
@@ -404,10 +406,12 @@ class LlmService(private val context: Context) {
         val chunks = splitIntoChunks(document, REDUCE_THRESHOLD)
         val mapped = mutableListOf<String>()
         chunks.forEachIndexed { i, chunk ->
-            val accChars = mapped.sumOf { it.length }
-            onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · $accChars / $REDUCE_THRESHOLD")
+            onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · ${mapped.sumOf { it.length }} / $REDUCE_THRESHOLD")
             val r = extractChunk(chunk)
-            if (r != null) mapped.add(r)
+            if (r != null) {
+                mapped.add(r)
+                onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · ${mapped.sumOf { it.length }} / $REDUCE_THRESHOLD")
+            }
         }
         if (mapped.isEmpty()) return@withContext ""
 
@@ -510,6 +514,7 @@ class LlmService(private val context: Context) {
             if (!r.isNullOrBlank()) {
                 if (results.isNotEmpty()) results.append("\n\n")
                 results.append(r)
+                onProgress("TRANSFORM · section ${i + 1} / ${chunks.size} · ${results.length} chars")
             }
         }
         results.toString()
