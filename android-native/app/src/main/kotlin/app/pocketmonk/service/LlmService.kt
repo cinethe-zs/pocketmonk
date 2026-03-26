@@ -271,9 +271,19 @@ class LlmService(private val context: Context) {
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
         val raw = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim() } ?: return@withContext emptyList()
-        raw.lines()
-            .map { it.trim().trimStart('-', '*', '•', '·').trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == ' ' }.trim() }
+        raw
+            .replace("\\n", "\n")
+            .replace("\\r", "")
+            .lines()
+            .map { it.trim()
+                .removeSurrounding("\"")
+                .removeSurrounding("'")
+                .trimStart('-', '*', '•', '·')
+                .trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == ' ' }
+                .trim()
+            }
             .filter { it.length > 4 && !it.equals("SKIP", ignoreCase = true) }
+            .distinct()
             .take(5)
     }
 
