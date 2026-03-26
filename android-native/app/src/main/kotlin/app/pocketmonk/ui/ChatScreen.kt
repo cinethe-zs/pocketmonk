@@ -801,9 +801,9 @@ fun ChatScreen(
                                 )
                             } else {
                                 val (levelLabel, levelDesc) = when (searchLevel) {
-                                    1 -> "Normal" to "6 results · reads top 4 pages"
-                                    2 -> "Deep" to "model plans queries · sufficiency check"
-                                    3 -> "Super Deep" to "reads 5 pages before sufficiency check"
+                                    1 -> "Normal" to "6 results · reads top 2 pages"
+                                    2 -> "Deep" to "agentic · up to 10 pages · sufficiency check"
+                                    3 -> "Super Deep" to "agentic · reads 5 before sufficiency check"
                                     4 -> "5-Forced" to "reads top 5 pages · no sufficiency check"
                                     else -> "10-Forced" to "reads top 10 pages · no sufficiency check"
                                 }

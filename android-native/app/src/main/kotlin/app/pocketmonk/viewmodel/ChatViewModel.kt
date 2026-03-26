@@ -437,7 +437,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _searchStatus.value = "Fetching results…"
         _errorMessage.value = null
 
-        viewModelScope.launch {
+        processingJob = viewModelScope.launch {
             try {
                 // ── Levels 2–5: Deep agentic pipeline ────────────────────────
                 if (level >= 2) {
@@ -718,6 +718,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _searchStatus.value = null
                     sendMessage(query)
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                withContext(Dispatchers.Main) {
+                    _isSearching.value = false
+                    _searchStatus.value = null
+                    _searchLog.value = null
+                }
+                throw e
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     _isSearching.value = false
@@ -746,6 +753,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val newMessages = conv.messages.filterNot { it === lastUser }.toMutableList()
                 _currentConversation.value = conv.copy(messages = newMessages)
             }
+            return
+        }
+        // Cancel in-flight search if running
+        if (_isSearching.value) {
+            processingJob?.cancel()
+            processingJob = null
+            _isSearching.value = false
+            _searchStatus.value = null
+            _searchLog.value = null
             return
         }
         llmService.cancel()

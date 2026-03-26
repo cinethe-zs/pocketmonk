@@ -1,6 +1,9 @@
 package app.pocketmonk.service
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
@@ -37,8 +40,9 @@ class WebSearchService {
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * [level] 1=Quick, 2=Normal, 3=Deep.
-     * [contextSize] drives the content budget (20 % of context window).
+     * [level] 1=Normal, 2=Deep, 3=Super Deep.
+     * [contextSize] drives the content budget (40% of context window).
+     * Pages within the fetch limit are fetched in parallel.
      */
     suspend fun search(
         query: String,
@@ -61,11 +65,16 @@ class WebSearchService {
         val html = fetchDdgHtml(query)
         val results = parseResults(html, config.maxResults)
 
-        results.mapIndexed { i, result ->
-            if (i < config.pagesToFetch && result.realUrl != null) {
-                val content = runCatching { fetchPageContent(result.realUrl, charsPerPage) }.getOrNull()
-                result.copy(pageContent = content)
-            } else result
+        // Fetch pages in parallel — only the first pagesToFetch results need content.
+        coroutineScope {
+            results.mapIndexed { i, result ->
+                async {
+                    if (i < config.pagesToFetch && result.realUrl != null) {
+                        val content = runCatching { fetchPageContent(result.realUrl, charsPerPage) }.getOrNull()
+                        result.copy(pageContent = content)
+                    } else result
+                }
+            }.awaitAll()
         }
     }
 
@@ -96,10 +105,15 @@ class WebSearchService {
             setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36")
             setRequestProperty("Accept", "text/html,application/xhtml+xml")
             setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+            setRequestProperty("Accept-Encoding", "identity")
             connectTimeout = 10_000
             readTimeout = 10_000
         }
-        return conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
+        return try {
+            conn.inputStream.use { it.bufferedReader(Charsets.UTF_8).readText() }
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private fun parseResults(html: String, maxResults: Int): List<SearchResult> {
@@ -176,29 +190,50 @@ class WebSearchService {
         runCatching { fetchPageContent(url, Int.MAX_VALUE) }.getOrElse { "" }
     }
 
+    /** Clears the in-memory page cache. */
+    fun clearCache() { pageCache.clear() }
+
     // ── Page fetcher ──────────────────────────────────────────────────────────
 
+    /**
+     * Fetches and extracts text from [url], caching the full result.
+     * Retries once on IOException (transient network failures, timeouts).
+     * HTTP error codes are not retried.
+     */
     private fun fetchPageContent(url: String, maxChars: Int): String {
-        // Return cached full text, trimmed to requested budget
         val cached = pageCache[url]
         if (cached != null) {
             return if (cached.length > maxChars) cached.take(maxChars) + "…" else cached
         }
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.apply {
-            requestMethod = "GET"
-            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36")
-            setRequestProperty("Accept", "text/html")
-            setRequestProperty("Accept-Language", "en-US,en;q=0.9")
-            connectTimeout = 6_000
-            readTimeout = 6_000
-            instanceFollowRedirects = true
+        for (attempt in 0..1) {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.apply {
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36")
+                setRequestProperty("Accept", "text/html")
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                setRequestProperty("Accept-Encoding", "identity")
+                connectTimeout = 8_000
+                readTimeout = 8_000
+                instanceFollowRedirects = true
+            }
+            try {
+                if (conn.responseCode !in 200..299) {
+                    conn.disconnect()
+                    return ""  // HTTP error — don't retry
+                }
+                val html = conn.inputStream.use { it.bufferedReader(Charsets.UTF_8).readText() }
+                conn.disconnect()
+                val full = extractMainText(html, Int.MAX_VALUE)
+                pageCache[url] = full
+                return if (full.length > maxChars) full.take(maxChars) + "…" else full
+            } catch (e: java.io.IOException) {
+                conn.disconnect()
+                if (attempt == 1) return ""
+                // fall through to retry
+            }
         }
-        if (conn.responseCode !in 200..299) return ""
-        val html = conn.inputStream.bufferedReader(Charsets.UTF_8).readText()
-        val full = extractMainText(html, Int.MAX_VALUE)
-        pageCache[url] = full
-        return if (full.length > maxChars) full.take(maxChars) + "…" else full
+        return ""
     }
 
     /**
