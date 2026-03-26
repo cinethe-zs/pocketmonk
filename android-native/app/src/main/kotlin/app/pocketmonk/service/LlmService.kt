@@ -392,7 +392,7 @@ class LlmService(private val context: Context) {
             val compressed = mutableListOf<String>()
             batches.forEachIndexed { i, batch ->
                 val accChars = compressed.sumOf { it.length }
-                onProgress("Analyzing section ${i + 1} of ${batches.size} on iteration ${pass + 1}: $accChars/$REDUCE_THRESHOLD")
+                onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · $accChars / $REDUCE_THRESHOLD")
                 val r = compressBatch(batch)
                 if (r != null) compressed.add(r)
             }
@@ -405,7 +405,7 @@ class LlmService(private val context: Context) {
         val mapped = mutableListOf<String>()
         chunks.forEachIndexed { i, chunk ->
             val accChars = mapped.sumOf { it.length }
-            onProgress("Analyzing section ${i + 1} of ${chunks.size} on iteration 1: $accChars/$REDUCE_THRESHOLD")
+            onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · $accChars / $REDUCE_THRESHOLD")
             val r = extractChunk(chunk)
             if (r != null) mapped.add(r)
         }
@@ -449,7 +449,7 @@ class LlmService(private val context: Context) {
         val chunks = splitIntoChunks(document, 3000)
         val results = StringBuilder()
         chunks.forEachIndexed { i, chunk ->
-            onProgress("Processing section ${i + 1} of ${chunks.size}…")
+            onProgress("TRANSFORM · section ${i + 1} / ${chunks.size} · ${results.length} chars")
             val prompt = buildString {
                 append("<start_of_turn>user\n")
                 append("$instruction\n\n")

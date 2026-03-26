@@ -224,7 +224,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (intent == "TRANSFORM") {
                     // Stream: apply instruction chunk-by-chunk, concatenate results
-                    withContext(Dispatchers.Main) { _mapReduceStatus.value = "Preparing stream…" }
+                    withContext(Dispatchers.Main) { _mapReduceStatus.value = "TRANSFORM detected — preparing stream…" }
                     val result = try {
                         llmService.streamDocument(docContent, text) { status ->
                             viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
@@ -270,6 +270,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } else {
                     // Map-reduce: extract relevant facts per chunk, then compress
+                    withContext(Dispatchers.Main) { _mapReduceStatus.value = "ANALYZE detected — extracting…" }
                     val synthesis = try {
                         llmService.mapReduceDocument(docContent, text) { status ->
                             viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
