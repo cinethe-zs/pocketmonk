@@ -237,14 +237,19 @@ class WebSearchService {
     }
 
     /**
-     * Strips boilerplate and extracts meaningful content paragraphs.
-     * Prefers longer lines (≥60 chars) which are more likely to be real content
-     * rather than navigation links or menu items.
+     * Strips boilerplate and extracts meaningful content from a page.
+     *
+     * Pass 1: extract text from semantic paragraph-level tags (<p>, <li>, <h1>–<h3>,
+     * <blockquote>). This preserves short factual lines (e.g. "Deaths: 1,200", bullet
+     * points, table cells) that the line-length heuristic would discard.
+     *
+     * Pass 2 (fallback): if Pass 1 yields too little (sparse or tag-free page), strip all
+     * tags and keep lines ≥ 60 chars as before.
      */
     private fun extractMainText(html: String, maxChars: Int): String {
         var text = html
 
-        // Remove entire noisy block elements (tag + all inner content)
+        // Remove entire noisy block elements first
         for (tag in listOf("script", "style", "nav", "header", "footer",
                             "aside", "noscript", "form", "iframe")) {
             text = text.replace(
@@ -252,21 +257,42 @@ class WebSearchService {
             )
         }
 
-        // Strip remaining HTML tags and decode entities
-        text = text
-            .replace(Regex("<[^>]+>"), " ")
-            .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
-            .replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ")
+        // Pass 1: semantic paragraph extraction
+        val semanticContent = extractParagraphContent(text)
 
-        // Split into lines, drop short lines (nav, menu, labels)
-        val lines = text.split("\n").map { it.trim() }.filter { it.isNotBlank() }
-        val content = lines
-            .filter { it.length >= 60 }                   // real paragraph threshold
-            .joinToString("\n")
-            .ifBlank { lines.joinToString("\n") }          // fallback: use everything
+        val content = if (semanticContent.length >= 300) {
+            semanticContent
+        } else {
+            // Pass 2: line-length heuristic fallback
+            val stripped = text
+                .replace(Regex("<[^>]+>"), " ")
+                .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", "\"").replace("&#39;", "'").replace("&nbsp;", " ")
+            val lines = stripped.split("\n").map { it.trim() }.filter { it.isNotBlank() }
+            lines.filter { it.length >= 60 }.joinToString("\n").ifBlank { lines.joinToString("\n") }
+        }
 
-        // Trim to budget
         return if (content.length > maxChars) content.take(maxChars) + "…" else content
+    }
+
+    /**
+     * Extracts the text content of paragraph-level HTML elements.
+     * Handles <p>, <li>, <h1>–<h3>, <blockquote> — the tags that carry real article text,
+     * including short factual lines that a line-length filter would otherwise drop.
+     */
+    private fun extractParagraphContent(html: String): String {
+        val result = StringBuilder()
+        val tags = listOf("p", "li", "h1", "h2", "h3", "blockquote")
+        for (tag in tags) {
+            Regex("<$tag[^>]*>(.*?)</$tag>",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .findAll(html)
+                .forEach { match ->
+                    val text = stripTags(match.groupValues[1]).trim()
+                    if (text.isNotBlank()) result.appendLine(text)
+                }
+        }
+        return result.toString().trim()
     }
 
     private fun stripTags(html: String): String = html

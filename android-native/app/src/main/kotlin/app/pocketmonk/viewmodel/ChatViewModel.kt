@@ -636,6 +636,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     llmService.answerFromResearch(
                         question = query,
                         findings = allFindings,
+                        maxFindingsChars = (contextLength * 0.6 * 4).toInt(),
                         onPartial = { partial ->
                             viewModelScope.launch(Dispatchers.Main) {
                                 if (_isGenerating.value) {

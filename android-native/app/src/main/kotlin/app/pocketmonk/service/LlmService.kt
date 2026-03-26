@@ -643,6 +643,7 @@ class LlmService(private val context: Context) {
     fun answerFromResearch(
         question: String,
         findings: List<Triple<String, String, String>>,
+        maxFindingsChars: Int = 12_000,
         onPartial: (String) -> Unit,
         onDone: () -> Unit,
         onError: (String) -> Unit
@@ -652,71 +653,83 @@ class LlmService(private val context: Context) {
         if (isInferring) { onError("Already inferring"); return }
         isInferring = true
 
-        val onErrorOuter = onError
+        // Build prompt, capping findings to avoid overflowing the context window.
         val prompt = buildString {
             append("<start_of_turn>user\n")
-            findings.groupBy { it.first }.entries.forEach { (q, items) ->
-                append("[Web search results for \"$q\":]\n")
-                items.forEach { (_, title, info) -> append("  • $title: $info\n") }
-                append("\n")
+            var charsUsed = 0
+            findings.groupBy { it.first }.entries.forEach groupLoop@{ (q, items) ->
+                val header = "[Web search results for \"$q\":]\n"
+                if (charsUsed + header.length > maxFindingsChars) return@groupLoop
+                append(header); charsUsed += header.length
+                items.forEach { (_, title, info) ->
+                    val line = "  • $title: $info\n"
+                    if (charsUsed + line.length <= maxFindingsChars) {
+                        append(line); charsUsed += line.length
+                    }
+                }
+                append("\n"); charsUsed += 1
             }
             append("Based on the previous research notes, provide a comprehensive, well-organized answer to this: \"$question\"\n")
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
 
-        try {
-            val session = eng.createSession(SessionConfig(SamplerConfig(topK = 40, topP = 1.0, temperature = 1.0)))
-            currentSession = session
-
-            val watchdog = Runnable {
-                if (isInferring) {
-                    cancel()
-                    mainHandler.post { onErrorOuter("Generation timed out — context may be too long. Tap ↺ to retry.") }
-                }
-            }
-            mainHandler.postDelayed(watchdog, 45_000)
-
+        // Spawn a Thread that acquires engineLock before creating the session.
+        // This serializes answerFromResearch with all runSession() / runSessionStreaming() calls,
+        // preventing "FAILED_PRECONDITION: a session already exists" races.
+        Thread {
+            engineLock.lock()
+            val latch = CountDownLatch(1)
             val accumulated = StringBuilder()
-            Thread {
-                try {
-                    session.generateContentStream(listOf(InputData.Text(prompt)), object : ResponseCallback {
-                        override fun onNext(response: String) {
-                            if (!isInferring) return
-                            accumulated.append(response)
-                            mainHandler.removeCallbacks(watchdog)
-                            mainHandler.post { onPartial(accumulated.toString().cleaned()) }
-                        }
-                        override fun onDone() {
-                            mainHandler.removeCallbacks(watchdog)
-                            mainHandler.post {
-                                isInferring = false; currentSession = null
-                                try { session.close() } catch (_: Exception) {}
-                                onDone()
-                            }
-                        }
-                        override fun onError(throwable: Throwable) {
-                            mainHandler.removeCallbacks(watchdog)
-                            mainHandler.post {
-                                isInferring = false; currentSession = null
-                                try { session.close() } catch (_: Exception) {}
-                                if (throwable is CancellationException) onDone()
-                                else onErrorOuter(throwable.message ?: "Unknown error")
-                            }
-                        }
-                    })
-                } catch (e: Exception) {
-                    mainHandler.post {
-                        isInferring = false; currentSession = null
-                        try { session.close() } catch (_: Exception) {}
-                        onErrorOuter(e.message ?: "Unknown error")
-                    }
-                }
-            }.start()
+            var shouldCallDone = false
+            var callbackError: String? = null
+            var session: Session? = null
 
-        } catch (e: Exception) {
-            isInferring = false; currentSession = null
-            onErrorOuter(e.message ?: "Unknown error during inference")
-        }
+            try {
+                session = eng.createSession(SessionConfig(SamplerConfig(topK = 40, topP = 1.0, temperature = 1.0)))
+                currentSession = session
+
+                // Watchdog: cancel if generation hangs for more than 45 s.
+                val watchdog = Runnable { cancel() }
+                mainHandler.postDelayed(watchdog, 45_000)
+
+                session.generateContentStream(listOf(InputData.Text(prompt)), object : ResponseCallback {
+                    override fun onNext(response: String) {
+                        accumulated.append(response)
+                        mainHandler.post { onPartial(accumulated.toString().cleaned()) }
+                    }
+                    override fun onDone() {
+                        mainHandler.removeCallbacks(watchdog)
+                        currentSession = null
+                        try { session?.close() } catch (_: Exception) {}
+                        shouldCallDone = true
+                        latch.countDown()
+                    }
+                    override fun onError(throwable: Throwable) {
+                        mainHandler.removeCallbacks(watchdog)
+                        currentSession = null
+                        try { session?.close() } catch (_: Exception) {}
+                        // CancellationException = user stopped or watchdog fired.
+                        // Use accumulated partial text rather than showing an error.
+                        if (throwable is CancellationException) shouldCallDone = true
+                        else callbackError = throwable.message ?: "Unknown error"
+                        latch.countDown()
+                    }
+                })
+
+                try { latch.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+            } catch (e: Exception) {
+                currentSession = null
+                try { session?.close() } catch (_: Exception) {}
+                callbackError = e.message ?: "Unknown error during inference"
+            } finally {
+                isInferring = false
+                engineLock.unlock()
+            }
+
+            // Post result callbacks only after the lock is released.
+            if (shouldCallDone) mainHandler.post { onDone() }
+            else callbackError?.let { err -> mainHandler.post { onError(err) } }
+        }.start()
     }
 
     fun cancel() {
