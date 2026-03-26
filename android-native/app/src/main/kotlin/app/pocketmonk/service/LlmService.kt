@@ -58,15 +58,29 @@ class LlmService(private val context: Context) {
             .commit()
 
         try {
-            val e = Engine(
-                EngineConfig(
-                    modelPath = modelPath,
-                    backend = Backend.CPU(),
-                    maxNumTokens = maxTokens,
-                    cacheDir = context.cacheDir.absolutePath,
+            val e = try {
+                val gpu = Engine(
+                    EngineConfig(
+                        modelPath = modelPath,
+                        backend = Backend.GPU(),
+                        maxNumTokens = maxTokens,
+                        cacheDir = context.cacheDir.absolutePath,
+                    )
                 )
-            )
-            e.initialize()
+                gpu.initialize()
+                gpu
+            } catch (_: Exception) {
+                val cpu = Engine(
+                    EngineConfig(
+                        modelPath = modelPath,
+                        backend = Backend.CPU(numOfThreads = 6),
+                        maxNumTokens = maxTokens,
+                        cacheDir = context.cacheDir.absolutePath,
+                    )
+                )
+                cpu.initialize()
+                cpu
+            }
             engine = e
             isReady = true
         } finally {
