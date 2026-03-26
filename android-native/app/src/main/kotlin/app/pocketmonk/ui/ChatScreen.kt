@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
@@ -174,6 +175,7 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val messages = currentConversation?.messages ?: emptyList()
     val showScrollToBottom by remember { derivedStateOf { listState.canScrollForward } }
+    val showScrollToTop by remember { derivedStateOf { listState.canScrollBackward } }
 
     // ── Stuck-to-bottom ───────────────────────────────────────────────────────
     // True while we should auto-scroll on new content; flips to false the moment
@@ -290,9 +292,11 @@ fun ChatScreen(
     }
 
     // Lifted so ChatScreen can trigger a scroll when the card is expanded.
-    var documentLogExpanded by remember(documentLog) { mutableStateOf(false) }
-    var ocrLogExpanded by remember(ocrLog) { mutableStateOf(false) }
-    var audioLogExpanded by remember(audioLog) { mutableStateOf(false) }
+    // Key on documentName so partial transcript updates don't reset the state.
+    // documentLog starts expanded (show what was extracted); audio/OCR start collapsed.
+    var documentLogExpanded by remember(documentName) { mutableStateOf(true) }
+    var ocrLogExpanded by remember(documentName) { mutableStateOf(false) }
+    var audioLogExpanded by remember(documentName) { mutableStateOf(false) }
     LaunchedEffect(documentLogExpanded) {
         if (documentLogExpanded && stuckToBottom) {
             kotlinx.coroutines.delay(50)
@@ -522,6 +526,34 @@ fun ChatScreen(
                     item { Spacer(Modifier.height(8.dp)) }
                 }
 
+                if (showScrollToTop) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                    ) {
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    isAutoScrolling = true
+                                    listState.animateScrollToItem(0)
+                                    isAutoScrolling = false
+                                }
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(SurfaceRaised)
+                        ) {
+                            Icon(
+                                Icons.Filled.KeyboardArrowUp,
+                                contentDescription = "Scroll to top",
+                                tint = Accent,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
                 if (showScrollToBottom) {
                     Box(
                         modifier = Modifier
