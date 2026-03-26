@@ -214,29 +214,82 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         val docContent = _documentContent.value
         if (docContent != null && docContent.length > 8000) {
-            // Long document: run map-reduce before chat
+            // Long document: classify intent, then stream (TRANSFORM) or map-reduce (ANALYZE)
             _isMapReducing.value = true
-            _mapReduceStatus.value = "Preparing…"
+            _mapReduceStatus.value = "Classifying request…"
             viewModelScope.launch {
-                val synthesis = try {
-                    llmService.mapReduceDocument(docContent, text) { status ->
-                        viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
+                val intent = try {
+                    withContext(Dispatchers.IO) { llmService.classifyIntent(text) }
+                } catch (_: Throwable) { "ANALYZE" }
+
+                if (intent == "TRANSFORM") {
+                    // Stream: apply instruction chunk-by-chunk, concatenate results
+                    withContext(Dispatchers.Main) { _mapReduceStatus.value = "Preparing stream…" }
+                    val result = try {
+                        llmService.streamDocument(docContent, text) { status ->
+                            viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
+                        }
+                    } catch (e: Throwable) {
+                        withContext(Dispatchers.Main) {
+                            _isMapReducing.value = false
+                            _mapReduceStatus.value = null
+                            _isGenerating.value = false
+                            conv.messages.remove(userMessage)
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            _errorMessage.value = "Failed to process document: ${e.message}"
+                        }
+                        return@launch
                     }
-                } catch (e: Throwable) {
                     withContext(Dispatchers.Main) {
                         _isMapReducing.value = false
                         _mapReduceStatus.value = null
                         _isGenerating.value = false
-                        conv.messages.remove(userMessage)
-                        _currentConversation.value = conv.copy(messages = conv.messages)
-                        _errorMessage.value = "Failed to analyze document: ${e.message}"
+                        if (result.isBlank()) {
+                            conv.messages.remove(userMessage)
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            _errorMessage.value = "Stream processing produced no output."
+                        } else {
+                            // Full result shown in UI via streamDisplay;
+                            // short placeholder in LLM context to avoid context overflow.
+                            val assistantMessage = Message(
+                                role = MessageRole.ASSISTANT,
+                                content = "I processed and transformed your document.",
+                                streamDisplay = result,
+                                status = MessageStatus.DONE,
+                            )
+                            conv.messages.add(assistantMessage)
+                            // Replace documentContent with the result for follow-up questions
+                            _documentContent.value = result
+                            _documentLog.value = result
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            persistCurrentConversation()
+                            if (conv.title == "New Conversation" && conv.messages.size == 2) {
+                                autoGenerateTitle(conv, userMessage.content, result.take(200))
+                            }
+                        }
                     }
-                    return@launch
-                }
-                withContext(Dispatchers.Main) {
-                    _isMapReducing.value = false
-                    _mapReduceStatus.value = null
-                    doChat(conv, userMessage, synthesis.ifBlank { null })
+                } else {
+                    // Map-reduce: extract relevant facts per chunk, then compress
+                    val synthesis = try {
+                        llmService.mapReduceDocument(docContent, text) { status ->
+                            viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
+                        }
+                    } catch (e: Throwable) {
+                        withContext(Dispatchers.Main) {
+                            _isMapReducing.value = false
+                            _mapReduceStatus.value = null
+                            _isGenerating.value = false
+                            conv.messages.remove(userMessage)
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            _errorMessage.value = "Failed to analyze document: ${e.message}"
+                        }
+                        return@launch
+                    }
+                    withContext(Dispatchers.Main) {
+                        _isMapReducing.value = false
+                        _mapReduceStatus.value = null
+                        doChat(conv, userMessage, synthesis.ifBlank { null })
+                    }
                 }
             }
         } else {
@@ -802,7 +855,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun loadDocument(name: String, content: String) {
         _documentName.value = name
         _documentContent.value = content
-        _documentLog.value = content.take(8000)
+        _documentLog.value = content
         _ocrLog.value = null
         _audioLog.value = null
     }
@@ -869,7 +922,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         onPartialResult = { partial ->
                             viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
                                 if (_documentName.value == null) _documentName.value = name
-                                _audioLog.value = partial.take(8000)
+                                _audioLog.value = partial
                             }
                         },
                     )
@@ -895,7 +948,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _documentContent.value = "Audio transcript:\n$transcript"
                         _documentLog.value = null
                         _ocrLog.value = null
-                        _audioLog.value = transcript.take(8000)
+                        _audioLog.value = transcript
                     }
                 }
                 return@launch
@@ -914,7 +967,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (ocrText.isNotBlank()) {
                     withContext(kotlinx.coroutines.Dispatchers.Main) {
                         _documentName.value = name
-                        _ocrLog.value = ocrText.take(8000)
+                        _ocrLog.value = ocrText
                     }
                 }
                 val audioLang = voskService.bestModelKey(_voskLanguage.value, _voskSizePref.value)
@@ -934,7 +987,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             },
                             onPartialResult = { partial ->
                                 viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                    _audioLog.value = partial.take(8000)
+                                    _audioLog.value = partial
                                 }
                             },
                         )
@@ -960,8 +1013,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _documentName.value = name
                         _documentContent.value = combined
                         _documentLog.value = null
-                        _ocrLog.value = ocrText.take(8000).takeIf { it.isNotBlank() }
-                        _audioLog.value = audioText.take(8000).takeIf { it.isNotBlank() }
+                        _ocrLog.value = ocrText.takeIf { it.isNotBlank() }
+                        _audioLog.value = audioText.takeIf { it.isNotBlank() }
                     }
                 }
                 return@launch

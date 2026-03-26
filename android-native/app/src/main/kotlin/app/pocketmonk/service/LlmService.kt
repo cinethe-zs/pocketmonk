@@ -332,6 +332,10 @@ class LlmService(private val context: Context) {
      * MAP:    split into ~7000-char chunks, extract facts relevant to [question] from each
      * REDUCE: iteratively compress batches of extractions until they fit in 7000 chars
      * Returns the final synthesis to use as documentContent in the chat() call.
+     *
+     * Progress format: "Analyzing section X of Y on iteration Z: chars/7000"
+     *   - Iteration 1 = MAP phase, 2+ = REDUCE passes
+     *   - chars = accumulated extracted/compressed chars so far
      */
     suspend fun mapReduceDocument(
         document: String,
@@ -339,31 +343,7 @@ class LlmService(private val context: Context) {
         onProgress: (String) -> Unit,
     ): String = withContext(Dispatchers.IO) {
         val eng = engine ?: return@withContext ""
-
-        fun splitIntoChunks(text: String, maxChars: Int): List<String> {
-            val chunks = mutableListOf<String>()
-            var start = 0
-            while (start < text.length) {
-                if (start + maxChars >= text.length) {
-                    val tail = text.substring(start).trim()
-                    if (tail.isNotBlank()) chunks.add(tail)
-                    break
-                }
-                val window = text.substring(start, start + maxChars)
-                val minSplit = maxChars / 2
-                val splitAt = listOf(
-                    window.lastIndexOf("\n\n"),
-                    window.lastIndexOf('\n'),
-                    window.lastIndexOf(". "),
-                    window.lastIndexOf(' '),
-                ).filter { it > minSplit }
-                 .maxOrNull()
-                 ?: (maxChars - 1)
-                chunks.add(window.substring(0, splitAt + 1).trim())
-                start += splitAt + 1
-            }
-            return chunks.filter { it.isNotBlank() }
-        }
+        val REDUCE_THRESHOLD = 7000
 
         fun extractChunk(chunk: String): String? {
             val prompt = buildString {
@@ -407,11 +387,12 @@ class LlmService(private val context: Context) {
 
         fun reduce(parts: List<String>, pass: Int): List<String> {
             val joined = parts.joinToString("\n\n---\n\n")
-            if (joined.length <= 7000) return parts
-            val batches = packIntoBatches(parts, 7000)
+            if (joined.length <= REDUCE_THRESHOLD) return parts
+            val batches = packIntoBatches(parts, REDUCE_THRESHOLD)
             val compressed = mutableListOf<String>()
             batches.forEachIndexed { i, batch ->
-                onProgress("Synthesizing (pass $pass, batch ${i + 1}/${batches.size})…")
+                val accChars = compressed.sumOf { it.length }
+                onProgress("Analyzing section ${i + 1} of ${batches.size} on iteration ${pass + 1}: $accChars/$REDUCE_THRESHOLD")
                 val r = compressBatch(batch)
                 if (r != null) compressed.add(r)
             }
@@ -419,11 +400,12 @@ class LlmService(private val context: Context) {
             else reduce(compressed, pass + 1)
         }
 
-        // MAP
-        val chunks = splitIntoChunks(document, 7000)
+        // MAP (iteration 1)
+        val chunks = splitIntoChunks(document, REDUCE_THRESHOLD)
         val mapped = mutableListOf<String>()
         chunks.forEachIndexed { i, chunk ->
-            onProgress("Analyzing section ${i + 1} of ${chunks.size}…")
+            val accChars = mapped.sumOf { it.length }
+            onProgress("Analyzing section ${i + 1} of ${chunks.size} on iteration 1: $accChars/$REDUCE_THRESHOLD")
             val r = extractChunk(chunk)
             if (r != null) mapped.add(r)
         }
@@ -432,6 +414,55 @@ class LlmService(private val context: Context) {
         // REDUCE
         val reduced = reduce(mapped, 1)
         reduced.joinToString("\n\n---\n\n")
+    }
+
+    /**
+     * Classifies whether [question] is a TRANSFORM request (translate, rewrite, fix, format)
+     * or an ANALYZE request (summarize, explain, answer, extract).
+     * Returns "TRANSFORM" or "ANALYZE".
+     */
+    suspend fun classifyIntent(question: String): String = withContext(Dispatchers.IO) {
+        val eng = engine ?: return@withContext "ANALYZE"
+        val prompt = buildString {
+            append("<start_of_turn>user\n")
+            append("Reply with exactly one word: TRANSFORM or ANALYZE.\n")
+            append("- TRANSFORM: translate, rewrite, fix, format, convert, correct, improve, paraphrase\n")
+            append("- ANALYZE: summarize, explain, answer, extract, find, list, what, why, how\n")
+            append("Request: \"$question\"\n")
+            append("<end_of_turn>\n<start_of_turn>model\n")
+        }
+        val r = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned().uppercase() }
+        if (r?.startsWith("TRANSFORM") == true) "TRANSFORM" else "ANALYZE"
+    }
+
+    /**
+     * Stream-processes a large document by applying [instruction] to each ~3000-char chunk
+     * and concatenating the results.
+     * Used for TRANSFORM requests (translation, rewriting, formatting, etc.).
+     */
+    suspend fun streamDocument(
+        document: String,
+        instruction: String,
+        onProgress: (String) -> Unit,
+    ): String = withContext(Dispatchers.IO) {
+        val eng = engine ?: return@withContext ""
+        val chunks = splitIntoChunks(document, 3000)
+        val results = StringBuilder()
+        chunks.forEachIndexed { i, chunk ->
+            onProgress("Processing section ${i + 1} of ${chunks.size}…")
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("$instruction\n\n")
+                append(chunk)
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            val r = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned() }
+            if (!r.isNullOrBlank()) {
+                if (results.isNotEmpty()) results.append("\n\n")
+                results.append(r)
+            }
+        }
+        results.toString()
     }
 
     suspend fun generateTitleFromContext(ctx: String): String? = withContext(Dispatchers.IO) {
@@ -635,6 +666,35 @@ class LlmService(private val context: Context) {
     }
 
     // ── Helpers ────────────────────────────────────────────────
+
+    /**
+     * Splits [text] into chunks of at most [maxChars], breaking on paragraph/line/sentence/word
+     * boundaries rather than mid-word.
+     */
+    private fun splitIntoChunks(text: String, maxChars: Int): List<String> {
+        val chunks = mutableListOf<String>()
+        var start = 0
+        while (start < text.length) {
+            if (start + maxChars >= text.length) {
+                val tail = text.substring(start).trim()
+                if (tail.isNotBlank()) chunks.add(tail)
+                break
+            }
+            val window = text.substring(start, start + maxChars)
+            val minSplit = maxChars / 2
+            val splitAt = listOf(
+                window.lastIndexOf("\n\n"),
+                window.lastIndexOf('\n'),
+                window.lastIndexOf(". "),
+                window.lastIndexOf(' '),
+            ).filter { it > minSplit }
+             .maxOrNull()
+             ?: (maxChars - 1)
+            chunks.add(window.substring(0, splitAt + 1).trim())
+            start += splitAt + 1
+        }
+        return chunks.filter { it.isNotBlank() }
+    }
 
     /**
      * Runs [block] on a fresh Session, closing it afterward. Returns null on any exception.

@@ -315,7 +315,8 @@ private fun AssistantBubble(
 ) {
     val clipboard = LocalClipboardManager.current
     val isStreaming = message.status == MessageStatus.STREAMING
-    val displayText = if (isStreaming && streamingText.isNotEmpty()) streamingText else message.content
+    val displayText = if (isStreaming && streamingText.isNotEmpty()) streamingText
+                     else message.streamDisplay ?: message.content
 
     Column(
         horizontalAlignment = Alignment.Start,
@@ -362,7 +363,7 @@ private fun AssistantBubble(
                     )
                 }
                 IconButton(
-                    onClick = { clipboard.setText(AnnotatedString(message.content)) },
+                    onClick = { clipboard.setText(AnnotatedString(message.streamDisplay ?: message.content)) },
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
