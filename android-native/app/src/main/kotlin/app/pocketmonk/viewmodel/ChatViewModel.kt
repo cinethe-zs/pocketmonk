@@ -365,7 +365,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             contextSummary = contextSummary,
             documentName = _documentName.value,
             documentContent = documentContent,
-            temperature = conv.temperature,
+            temperature = if (documentContent != null) 0.4f else conv.temperature,
             onPartial = { partial ->
                 viewModelScope.launch(Dispatchers.Main) {
                     if (_isGenerating.value) _streamingText.value = partial

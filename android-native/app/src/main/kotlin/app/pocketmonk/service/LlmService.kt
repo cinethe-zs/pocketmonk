@@ -782,21 +782,39 @@ class LlmService(private val context: Context) {
         val latch = CountDownLatch(1)
         val accumulated = StringBuilder()
         var finalResult: String? = null
+        // Saved before repetition loop was detected; used as the actual result.
+        var preRepetitionResult: String? = null
         return try {
-            session = eng.createSession()
+            session = eng.createSession(
+                SessionConfig(SamplerConfig(topK = 40, topP = 0.95, temperature = 0.4))
+            )
             currentSession = session
             session.generateContentStream(inputs, object : ResponseCallback {
                 override fun onNext(response: String) {
                     accumulated.append(response)
-                    onToken(accumulated.toString())
+                    val text = accumulated.toString()
+                    if (preRepetitionResult == null) {
+                        val trimmed = trimRepetitionLoop(text)
+                        if (trimmed != null) {
+                            // Loop detected: save clean portion, stop generation
+                            preRepetitionResult = trimmed
+                            try { currentSession?.cancelProcess() } catch (_: Exception) {}
+                            return
+                        }
+                        onToken(text)
+                    }
                 }
                 override fun onDone() {
-                    finalResult = accumulated.toString().trim().cleaned().ifBlank { null }
+                    finalResult = (preRepetitionResult ?: accumulated.toString())
+                        .trim().cleaned().ifBlank { null }
                     currentSession = null
                     try { session?.close() } catch (_: Exception) {}
                     latch.countDown()
                 }
                 override fun onError(throwable: Throwable) {
+                    // If we cancelled due to repetition, use the saved clean portion
+                    finalResult = (preRepetitionResult ?: accumulated.toString())
+                        .trim().cleaned().ifBlank { null }
                     currentSession = null
                     try { session?.close() } catch (_: Exception) {}
                     latch.countDown()
@@ -810,6 +828,26 @@ class LlmService(private val context: Context) {
         } finally {
             engineLock.unlock()
         }
+    }
+
+    /**
+     * Returns the text with the repetition loop stripped if a loop is detected, null otherwise.
+     * Detection: any 40-char pattern appearing 4+ times in the last 600 chars of [text].
+     */
+    private fun trimRepetitionLoop(text: String): String? {
+        if (text.length < 160) return null
+        val tail = text.takeLast(600)
+        for (patLen in intArrayOf(40, 60, 100)) {
+            if (tail.length < patLen * 4) continue
+            val pattern = tail.substring(tail.length - patLen)
+            val count = tail.split(pattern).size - 1
+            if (count >= 4) {
+                // Trim everything from where the repetition started
+                val dropCount = patLen * (count - 1)
+                return text.dropLast(minOf(dropCount, text.length / 2)).trim()
+            }
+        }
+        return null
     }
 
     /**
