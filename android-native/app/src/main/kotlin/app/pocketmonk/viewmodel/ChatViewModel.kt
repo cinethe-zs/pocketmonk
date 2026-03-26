@@ -85,6 +85,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _classifierLog = MutableStateFlow<String?>(null)
     val classifierLog: StateFlow<String?> = _classifierLog.asStateFlow()
 
+    private val _transformLog = MutableStateFlow<String?>(null)
+    val transformLog: StateFlow<String?> = _transformLog.asStateFlow()
+
+    private val _analyzeIterationLogs = MutableStateFlow<List<String>>(emptyList())
+    val analyzeIterationLogs: StateFlow<List<String>> = _analyzeIterationLogs.asStateFlow()
+
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
 
@@ -221,6 +227,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // Long document: classify intent, then stream (TRANSFORM) or map-reduce (ANALYZE)
             _isMapReducing.value = true
             _mapReduceStatus.value = "Classifying request…"
+            _transformLog.value = null
+            _analyzeIterationLogs.value = emptyList()
             processingJob = viewModelScope.launch {
                 val classification = llmService.classifyIntentLlm(text) { prompt, response ->
                     viewModelScope.launch(Dispatchers.Main) {
@@ -241,9 +249,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // Stream: apply instruction chunk-by-chunk, concatenate results
                     withContext(Dispatchers.Main) { _mapReduceStatus.value = "$intentLabel — preparing stream…" }
                     val result = try {
-                        llmService.streamDocument(docContent, text) { status ->
-                            viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
-                        }
+                        llmService.streamDocument(
+                            document = docContent,
+                            instruction = text,
+                            onProgress = { status ->
+                                viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
+                            },
+                            onBuffer = { buf ->
+                                viewModelScope.launch(Dispatchers.Main) { _transformLog.value = buf }
+                            },
+                        )
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Throwable) {
@@ -289,9 +304,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // Map-reduce: extract relevant facts per chunk, then compress
                     withContext(Dispatchers.Main) { _mapReduceStatus.value = "$intentLabel — extracting…" }
                     val synthesis = try {
-                        llmService.mapReduceDocument(docContent, text) { status ->
-                            viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
-                        }
+                        llmService.mapReduceDocument(
+                            document = docContent,
+                            question = text,
+                            onProgress = { status ->
+                                viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
+                            },
+                            onIterationBuffer = { iterIndex, buffer ->
+                                viewModelScope.launch(Dispatchers.Main) {
+                                    val current = _analyzeIterationLogs.value.toMutableList()
+                                    while (current.size <= iterIndex) current.add("")
+                                    current[iterIndex] = buffer
+                                    _analyzeIterationLogs.value = current.toList()
+                                }
+                            },
+                        )
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
                     } catch (e: Throwable) {
@@ -711,6 +738,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _mapReduceStatus.value = null
             _isGenerating.value = false
             _streamingText.value = ""
+            _transformLog.value = null
+            _analyzeIterationLogs.value = emptyList()
             val conv = _currentConversation.value ?: return
             val lastUser = conv.messages.lastOrNull { it.role == MessageRole.USER && !it.isArchived }
             if (lastUser != null) {
@@ -904,6 +933,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _ocrLog.value = null
         _audioLog.value = null
         _classifierLog.value = null
+        _transformLog.value = null
+        _analyzeIterationLogs.value = emptyList()
     }
 
     fun loadDocumentFromUri(uri: android.net.Uri) {

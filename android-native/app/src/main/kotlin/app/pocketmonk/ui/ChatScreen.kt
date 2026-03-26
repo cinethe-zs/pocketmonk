@@ -115,6 +115,8 @@ fun ChatScreen(
     val isMapReducing by viewModel.isMapReducing.collectAsState()
     val mapReduceStatus by viewModel.mapReduceStatus.collectAsState()
     val classifierLog by viewModel.classifierLog.collectAsState()
+    val transformLog by viewModel.transformLog.collectAsState()
+    val analyzeIterationLogs by viewModel.analyzeIterationLogs.collectAsState()
     val documentLog by viewModel.documentLog.collectAsState()
     val ocrLog by viewModel.ocrLog.collectAsState()
     val audioLog by viewModel.audioLog.collectAsState()
@@ -522,6 +524,30 @@ fun ChatScreen(
                                 log = classifierLog!!,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
+                        }
+                    }
+                    if (transformLog != null) {
+                        item(key = "transform_log") {
+                            ProcessingLogCard(
+                                title = "TRANSFORM",
+                                accentColor = Color(0xFF00BFA5),
+                                borderColor = Color(0xFF003D30),
+                                text = transformLog!!,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    analyzeIterationLogs.forEachIndexed { index, buffer ->
+                        if (buffer.isNotEmpty()) {
+                            item(key = "analyze_iter_$index") {
+                                ProcessingLogCard(
+                                    title = "ANALYZE · iter ${index + 1}",
+                                    accentColor = Color(0xFF448AFF),
+                                    borderColor = Color(0xFF001A3D),
+                                    text = buffer,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                )
+                            }
                         }
                     }
                     if (isSearching && searchLog != null) {
@@ -1103,6 +1129,53 @@ private fun DocumentLogCard(
         if (expanded) {
             Text(
                 text = content,
+                color = Color(0xFFE6EDF3),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProcessingLogCard(
+    title: String,
+    accentColor: Color,
+    borderColor: Color,
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(true) }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF0D1117))
+            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+            .clickable { expanded = !expanded }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Text(
+                title,
+                color = accentColor,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = Color(0xFF8B949E),
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        if (expanded) {
+            Text(
+                text = text,
                 color = Color(0xFFE6EDF3),
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)

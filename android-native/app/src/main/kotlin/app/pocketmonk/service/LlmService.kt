@@ -342,6 +342,7 @@ class LlmService(private val context: Context) {
         document: String,
         question: String,
         onProgress: (String) -> Unit,
+        onIterationBuffer: (iterIndex: Int, buffer: String) -> Unit = { _, _ -> },
     ): String = withContext(Dispatchers.IO) {
         val eng = engine ?: return@withContext ""
         val REDUCE_THRESHOLD = 7000
@@ -393,26 +394,41 @@ class LlmService(private val context: Context) {
             val compressed = mutableListOf<String>()
             batches.forEachIndexed { i, batch ->
                 val prevChars = compressed.sumOf { it.length }
+                val prevBuffer = compressed.joinToString("\n\n---\n\n")
                 onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · $prevChars / $REDUCE_THRESHOLD")
                 val r = compressBatch(batch) { partial ->
                     onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · ${prevChars + partial.length} / $REDUCE_THRESHOLD")
+                    val sep = if (prevBuffer.isNotEmpty()) "\n\n---\n\n" else ""
+                    onIterationBuffer(pass, "$prevBuffer$sep$partial")
                 }
-                if (r != null) compressed.add(r)
+                if (r != null) {
+                    compressed.add(r)
+                    onIterationBuffer(pass, compressed.joinToString("\n\n---\n\n"))
+                }
             }
             return if (compressed.isEmpty()) listOf(parts.first())
             else reduce(compressed, pass + 1)
         }
 
-        // MAP (iteration 1)
+        // MAP (iteration 1, iterIndex = 0)
         val chunks = splitIntoChunks(document, REDUCE_THRESHOLD)
         val mapped = mutableListOf<String>()
+        val mapBuffer = StringBuilder()
         chunks.forEachIndexed { i, chunk ->
             val prevChars = mapped.sumOf { it.length }
+            val prevBuffer = mapBuffer.toString()
             onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · $prevChars / $REDUCE_THRESHOLD")
             val r = extractChunk(chunk) { partial ->
                 onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · ${prevChars + partial.length} / $REDUCE_THRESHOLD")
+                val sep = if (prevBuffer.isNotEmpty()) "\n\n---\n\n" else ""
+                onIterationBuffer(0, "$prevBuffer$sep$partial")
             }
-            if (r != null) mapped.add(r)
+            if (r != null) {
+                if (mapBuffer.isNotEmpty()) mapBuffer.append("\n\n---\n\n")
+                mapBuffer.append(r)
+                mapped.add(r)
+                onIterationBuffer(0, mapBuffer.toString())
+            }
         }
         if (mapped.isEmpty()) return@withContext ""
 
@@ -491,6 +507,7 @@ class LlmService(private val context: Context) {
         document: String,
         instruction: String,
         onProgress: (String) -> Unit,
+        onBuffer: (String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val eng = engine ?: return@withContext ""
         val chunks = splitIntoChunks(document, 3000)
@@ -504,12 +521,16 @@ class LlmService(private val context: Context) {
                 append(chunk)
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
+            val prevResults = results.toString()
             val r = runSessionStreaming(eng, listOf(InputData.Text(prompt))) { partial ->
                 onProgress("TRANSFORM · section ${i + 1} / ${chunks.size} · ${prevLength + partial.length} chars")
+                val sep = if (prevResults.isNotEmpty()) "\n\n" else ""
+                onBuffer("$prevResults$sep$partial")
             }
             if (!r.isNullOrBlank()) {
                 if (results.isNotEmpty()) results.append("\n\n")
                 results.append(r)
+                onBuffer(results.toString())
             }
         }
         results.toString()
