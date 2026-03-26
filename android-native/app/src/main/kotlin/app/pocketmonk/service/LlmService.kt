@@ -20,6 +20,7 @@ import com.google.ai.edge.litertlm.SessionConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.locks.ReentrantLock
 import com.google.ai.edge.litertlm.Message as LitMessage
 
@@ -345,7 +346,7 @@ class LlmService(private val context: Context) {
         val eng = engine ?: return@withContext ""
         val REDUCE_THRESHOLD = 7000
 
-        fun extractChunk(chunk: String): String? {
+        fun extractChunk(chunk: String, onToken: (String) -> Unit): String? {
             val prompt = buildString {
                 append("<start_of_turn>user\n")
                 append("Question: \"$question\"\n\n")
@@ -354,11 +355,11 @@ class LlmService(private val context: Context) {
                 append(chunk)
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
-            val r = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned() }
+            val r = runSessionStreaming(eng, listOf(InputData.Text(prompt)), onToken)
             return if (r == null || r.isBlank() || r.equals("NONE", ignoreCase = true)) null else r
         }
 
-        fun compressBatch(batch: String): String? {
+        fun compressBatch(batch: String, onToken: (String) -> Unit): String? {
             val prompt = buildString {
                 append("<start_of_turn>user\n")
                 append("Question: \"$question\"\n\n")
@@ -367,7 +368,7 @@ class LlmService(private val context: Context) {
                 append(batch)
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
-            return runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned().ifBlank { null } }
+            return runSessionStreaming(eng, listOf(InputData.Text(prompt)), onToken)?.ifBlank { null }
         }
 
         fun packIntoBatches(parts: List<String>, maxChars: Int): List<String> {
@@ -391,12 +392,12 @@ class LlmService(private val context: Context) {
             val batches = packIntoBatches(parts, REDUCE_THRESHOLD)
             val compressed = mutableListOf<String>()
             batches.forEachIndexed { i, batch ->
-                onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · ${compressed.sumOf { it.length }} / $REDUCE_THRESHOLD")
-                val r = compressBatch(batch)
-                if (r != null) {
-                    compressed.add(r)
-                    onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · ${compressed.sumOf { it.length }} / $REDUCE_THRESHOLD")
+                val prevChars = compressed.sumOf { it.length }
+                onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · $prevChars / $REDUCE_THRESHOLD")
+                val r = compressBatch(batch) { partial ->
+                    onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · ${prevChars + partial.length} / $REDUCE_THRESHOLD")
                 }
+                if (r != null) compressed.add(r)
             }
             return if (compressed.isEmpty()) listOf(parts.first())
             else reduce(compressed, pass + 1)
@@ -406,12 +407,12 @@ class LlmService(private val context: Context) {
         val chunks = splitIntoChunks(document, REDUCE_THRESHOLD)
         val mapped = mutableListOf<String>()
         chunks.forEachIndexed { i, chunk ->
-            onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · ${mapped.sumOf { it.length }} / $REDUCE_THRESHOLD")
-            val r = extractChunk(chunk)
-            if (r != null) {
-                mapped.add(r)
-                onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · ${mapped.sumOf { it.length }} / $REDUCE_THRESHOLD")
+            val prevChars = mapped.sumOf { it.length }
+            onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · $prevChars / $REDUCE_THRESHOLD")
+            val r = extractChunk(chunk) { partial ->
+                onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · ${prevChars + partial.length} / $REDUCE_THRESHOLD")
             }
+            if (r != null) mapped.add(r)
         }
         if (mapped.isEmpty()) return@withContext ""
 
@@ -495,18 +496,20 @@ class LlmService(private val context: Context) {
         val chunks = splitIntoChunks(document, 3000)
         val results = StringBuilder()
         chunks.forEachIndexed { i, chunk ->
-            onProgress("TRANSFORM · section ${i + 1} / ${chunks.size} · ${results.length} chars")
+            val prevLength = results.length
+            onProgress("TRANSFORM · section ${i + 1} / ${chunks.size} · $prevLength chars")
             val prompt = buildString {
                 append("<start_of_turn>user\n")
                 append("$instruction\n\n")
                 append(chunk)
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
-            val r = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned() }
+            val r = runSessionStreaming(eng, listOf(InputData.Text(prompt))) { partial ->
+                onProgress("TRANSFORM · section ${i + 1} / ${chunks.size} · ${prevLength + partial.length} chars")
+            }
             if (!r.isNullOrBlank()) {
                 if (results.isNotEmpty()) results.append("\n\n")
                 results.append(r)
-                onProgress("TRANSFORM · section ${i + 1} / ${chunks.size} · ${results.length} chars")
             }
         }
         results.toString()
@@ -741,6 +744,51 @@ class LlmService(private val context: Context) {
             start += splitAt + 1
         }
         return chunks.filter { it.isNotBlank() }
+    }
+
+    /**
+     * Like [runSession] but streams tokens via [generateContentStream].
+     * [onToken] is called with the fully accumulated text after each token arrives.
+     * Holds [engineLock] for the full duration.
+     */
+    private fun runSessionStreaming(
+        eng: Engine,
+        inputs: List<InputData>,
+        onToken: (String) -> Unit,
+    ): String? {
+        engineLock.lock()
+        var session: Session? = null
+        val latch = CountDownLatch(1)
+        val accumulated = StringBuilder()
+        var finalResult: String? = null
+        return try {
+            session = eng.createSession()
+            currentSession = session
+            session.generateContentStream(inputs, object : ResponseCallback {
+                override fun onNext(response: String) {
+                    accumulated.append(response)
+                    onToken(accumulated.toString())
+                }
+                override fun onDone() {
+                    finalResult = accumulated.toString().trim().cleaned().ifBlank { null }
+                    currentSession = null
+                    try { session?.close() } catch (_: Exception) {}
+                    latch.countDown()
+                }
+                override fun onError(throwable: Throwable) {
+                    currentSession = null
+                    try { session?.close() } catch (_: Exception) {}
+                    latch.countDown()
+                }
+            })
+            try { latch.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+            finalResult
+        } catch (e: Exception) {
+            try { session?.close() } catch (_: Exception) {}
+            null
+        } finally {
+            engineLock.unlock()
+        }
     }
 
     /**
