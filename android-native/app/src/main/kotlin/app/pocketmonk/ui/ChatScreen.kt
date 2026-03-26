@@ -563,10 +563,11 @@ fun ChatScreen(
                         IconButton(
                             onClick = {
                                 scope.launch {
-                                    if (messages.isNotEmpty()) {
+                                    val last = listState.layoutInfo.totalItemsCount - 1
+                                    if (last >= 0) {
                                         stuckToBottom = true
                                         isAutoScrolling = true
-                                        listState.animateScrollToItem(messages.size)
+                                        listState.animateScrollToItem(last)
                                         isAutoScrolling = false
                                     }
                                 }
