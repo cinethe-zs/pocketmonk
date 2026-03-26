@@ -433,24 +433,16 @@ class LlmService(private val context: Context) {
         val eng = engine ?: return@withContext IntentResult("ANALYZE", null)
         val prompt = buildString {
             append("<start_of_turn>user\n")
-            append("Classify the request below as TRANSFORM or ANALYZE. Reply with that single word only.\n\n")
-            append("TRANSFORM = modify or produce new text (translate, rewrite, fix, format, convert, correct, replace, paraphrase, improve style)\n")
-            append("ANALYZE = answer a question or extract information (summarize, explain, find, list, what, why, who, when)\n\n")
-            append("Examples:\n")
-            append("\"translate to French\" -> TRANSFORM\n")
-            append("\"replace all occurrences of X with Y\" -> TRANSFORM\n")
-            append("\"fix the grammar\" -> TRANSFORM\n")
-            append("\"rewrite in a formal tone\" -> TRANSFORM\n")
-            append("\"summarize\" -> ANALYZE\n")
-            append("\"what are the key points?\" -> ANALYZE\n")
-            append("\"who is mentioned?\" -> ANALYZE\n\n")
-            append("Request: \"$question\"\n")
+            append("Does this request need all the document content?\n\n")
+            append("Request: $question\n\n")
+            append("Answer by yes or no.\n")
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
         val raw = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned() } ?: ""
         onLog(prompt, raw)
-        val upper = raw.uppercase()
-        if (upper.contains("TRANSFORM")) IntentResult("TRANSFORM", null) else IntentResult("ANALYZE", null)
+        // "yes" = needs the whole doc = ANALYZE (map-reduce)
+        // "no"  = same operation on each chunk = TRANSFORM (stream)
+        if (raw.lowercase().contains("yes")) IntentResult("ANALYZE", null) else IntentResult("TRANSFORM", null)
     }
 
     /**
