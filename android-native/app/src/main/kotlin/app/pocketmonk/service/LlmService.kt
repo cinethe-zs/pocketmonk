@@ -277,6 +277,39 @@ class LlmService(private val context: Context) {
             .take(5)
     }
 
+    suspend fun generateAnswerDraft(question: String, context: String): String? =
+        withContext(Dispatchers.IO) {
+            val eng = engine ?: return@withContext null
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Research notes:\n${context.take(8000)}\n\n")
+                append("Based on the research notes above, write the best answer you can to: \"$question\"\n")
+                append("Mark any claims you are uncertain about with [?].\n")
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().ifBlank { null } }
+        }
+
+    suspend fun identifyUnsupportedClaims(draft: String, question: String): List<String> =
+        withContext(Dispatchers.IO) {
+            val eng = engine ?: return@withContext emptyList()
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Question: \"$question\"\n\nDraft answer:\n${draft.take(2000)}\n\n")
+                append("List up to 3 specific facts in this answer that are vague, uncertain, or missing.\n")
+                append("Be specific: instead of 'more detail needed', write 'exact release date not stated'.\n")
+                append("Output only the list, one item per line. If the draft fully answers the question, reply: COMPLETE")
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            val raw = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim() }
+                ?: return@withContext emptyList()
+            if (raw.trim().uppercase().startsWith("COMPLETE")) return@withContext emptyList()
+            raw.lines()
+                .map { it.trim().trimStart('-', '*', '•', '·').trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == ' ' }.trim() }
+                .filter { it.length > 5 }
+                .take(3)
+        }
+
     suspend fun extractRelevantInfo(
         pageContent: String,
         subQuery: String,

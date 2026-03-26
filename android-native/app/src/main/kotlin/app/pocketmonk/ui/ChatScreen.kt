@@ -801,10 +801,11 @@ fun ChatScreen(
                                 )
                             } else {
                                 val (levelLabel, levelDesc) = when (searchLevel) {
-                                    1 -> "Normal" to "6 results · reads top 2 pages"
-                                    2 -> "Deep" to "agentic · up to 10 pages · sufficiency check"
-                                    3 -> "Super Deep" to "agentic · reads 5 before sufficiency check"
-                                    4 -> "5-Forced" to "reads top 5 pages · no sufficiency check"
+                                    1 -> "SCS" to "snippet oracle · parallel queries · gap closure"
+                                    2 -> "Normal" to "6 results · reads top 2 pages"
+                                    3 -> "Deep" to "agentic · up to 10 pages · sufficiency check"
+                                    4 -> "Super Deep" to "agentic · reads 5 before sufficiency check"
+                                    5 -> "5-Forced" to "reads top 5 pages · no sufficiency check"
                                     else -> "10-Forced" to "reads top 10 pages · no sufficiency check"
                                 }
                                 Text(
@@ -915,7 +916,7 @@ fun ChatScreen(
                         Spacer(Modifier.width(4.dp))
                         // Search level button — cycles 0→1→2→3→0
                         IconButton(
-                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 6 },
+                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 7 },
                             enabled = modelReady && !isGenerating && !isCompressing && !isSearching,
                             modifier = Modifier.size(44.dp)
                         ) {

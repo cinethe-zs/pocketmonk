@@ -25,6 +25,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import java.util.UUID
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -439,8 +442,326 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         processingJob = viewModelScope.launch {
             try {
-                // ── Levels 2–5: Deep agentic pipeline ────────────────────────
-                if (level >= 2) {
+                // ── Level 1: Stratified Convergent Search ──────────────────────
+                if (level == 1) {
+                    val pageBudgetChars = (contextLength * 0.5 * 4).toInt()
+                    val allFindings = mutableListOf<Triple<String, String, String>>()
+                    var rollingContext = ""
+                    var sufficientEarly = false
+
+                    withContext(Dispatchers.Main) { _searchLog.value = "=== Stratified Convergent Search ===" }
+
+                    suspend fun appendLog(line: String) {
+                        withContext(Dispatchers.Main) {
+                            _searchLog.value = (_searchLog.value ?: "") + "\n$line"
+                        }
+                    }
+
+                    // ── Stage 0: Snippet Oracle ────────────────────────────────
+                    appendLog("\n[Stage 0 — Snippet Oracle]")
+                    withContext(Dispatchers.Main) { _searchStatus.value = "Snippet oracle…" }
+                    val stage0Query = runCatching {
+                        llmService.generateOptimizedQuery(query)
+                    }.getOrNull() ?: query
+                    appendLog("  Query: \"$stage0Query\"")
+                    val snippetResults = runCatching {
+                        webSearchService.searchMetadataOnly(stage0Query, 10)
+                    }.getOrElse { emptyList() }
+                    if (snippetResults.isNotEmpty()) {
+                        val snippetCtx = snippetResults.joinToString("\n") { "• ${it.title}: ${it.snippet}" }
+                        appendLog("  ${snippetResults.size} snippets — checking sufficiency…")
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Checking snippets…" }
+                        val (suf0, _) = runCatching {
+                            llmService.evaluateSufficiency(snippetCtx, query)
+                        }.getOrElse { Pair(false, 0) }
+                        appendLog("  Sufficient from snippets: ${if (suf0) "YES — fast path" else "no"}")
+                        if (suf0) {
+                            snippetResults.filter { it.snippet.isNotBlank() }
+                                .forEach { allFindings.add(Triple(stage0Query, it.title, it.snippet)) }
+                            sufficientEarly = true
+                        }
+                    }
+
+                    // ── Stage 1: Parallel Multi-Query ─────────────────────────
+                    if (!sufficientEarly) {
+                        appendLog("\n[Stage 1 — Parallel Multi-Query]")
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Generating search queries…" }
+                        val subQueries = runCatching {
+                            llmService.generateSearchQueries(query)
+                        }.getOrElse { listOf(stage0Query) }.take(3)
+                        appendLog("  ${subQueries.size} queries: ${subQueries.joinToString(" | ") { "\"$it\"" }}")
+
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Searching (${subQueries.size} parallel)…" }
+                        val queryResultPairs = coroutineScope {
+                            subQueries.map { q ->
+                                async {
+                                    runCatching { webSearchService.searchMetadataOnly(q, 10) }
+                                        .getOrElse { emptyList() }
+                                        .map { it to q }
+                                }
+                            }.awaitAll()
+                        }.flatten()
+
+                        val byUrl = linkedMapOf<String, Pair<WebSearchService.SearchResult, String>>()
+                        queryResultPairs.forEach { (r, q) ->
+                            if (r.realUrl != null) byUrl.putIfAbsent(r.realUrl, r to q)
+                        }
+                        val uniqueResults = byUrl.values.toList()
+                        appendLog("  ${uniqueResults.size} unique results")
+
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Scoring ${uniqueResults.size} results…" }
+                        val scoreSummary = uniqueResults.mapIndexed { i, (r, _) ->
+                            "${i + 1}. ${r.title}\n   ${r.snippet}"
+                        }.joinToString("\n")
+                        val scores = runCatching {
+                            llmService.scoreResults(scoreSummary, query)
+                        }.getOrElse { uniqueResults.indices.map { Pair(it, 5) } }
+
+                        val top6 = scores.take(6)
+                        top6.forEachIndexed { rank, (idx, score) ->
+                            uniqueResults.getOrNull(idx)?.let { (r, _) ->
+                                appendLog("  #${rank + 1} [$score/10] ${r.title.take(60)}")
+                            }
+                        }
+
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Fetching top ${top6.size} pages…" }
+                        val fetchedPages = coroutineScope {
+                            top6.map { (idx, score) ->
+                                val pair = uniqueResults.getOrNull(idx)
+                                async {
+                                    if (pair == null) return@async null
+                                    val (result, q) = pair
+                                    val url = result.realUrl ?: return@async null
+                                    val content = runCatching { webSearchService.fetchFullPage(url) }.getOrElse { "" }
+                                    if (content.isBlank()) null else Triple(score, result to q, content)
+                                }
+                            }.awaitAll().filterNotNull()
+                        }
+
+                        for ((score, rq, content) in fetchedPages) {
+                            val (result, q) = rq
+                            val host = result.displayUrl.ifBlank { result.title }.take(50)
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $host…" }
+                            appendLog("  [$score/10] $host — ${content.length} chars")
+                            val extracted = runCatching {
+                                llmService.extractRelevantInfo(content, q, query)
+                            }.getOrNull()
+                            if (!extracted.isNullOrBlank()) {
+                                allFindings.add(Triple(q, result.title, extracted))
+                                val chunk = "\n• ${result.title}: $extracted"
+                                rollingContext = if (rollingContext.length + chunk.length > pageBudgetChars) {
+                                    runCatching { llmService.compressText(rollingContext + chunk, query) }.getOrNull()
+                                        ?: (rollingContext + chunk).takeLast(pageBudgetChars)
+                                } else rollingContext + chunk
+                                extracted.lines().forEach { appendLog("      $it") }
+                            } else appendLog("    → nothing relevant")
+                        }
+                        appendLog("  Stage 1 done: ${allFindings.size} findings")
+
+                        if (rollingContext.isNotBlank()) {
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Checking sufficiency…" }
+                            val (suf1, _) = runCatching {
+                                llmService.evaluateSufficiency(rollingContext, query)
+                            }.getOrElse { Pair(false, 0) }
+                            appendLog("  Sufficiency after Stage 1: ${if (suf1) "YES" else "no"}")
+                            if (suf1) sufficientEarly = true
+                        }
+                    }
+
+                    // ── Stage 2: Deep Extraction Loop (2 passes) ──────────────
+                    if (!sufficientEarly) {
+                        appendLog("\n[Stage 2 — Deep Extraction Loop]")
+                        var gapContext: String? = null
+                        for (pass in 1..2) {
+                            appendLog("  Pass $pass / 2")
+                            val gap = if (rollingContext.isNotBlank()) {
+                                withContext(Dispatchers.Main) { _searchStatus.value = "Analyzing gaps (pass $pass)…" }
+                                runCatching { llmService.analyzeGaps(rollingContext, query, gapContext) }.getOrNull()
+                            } else null
+                            if (gap.isNullOrBlank()) { appendLog("  No gap — stopping"); break }
+                            appendLog("  Gap: ${gap.take(120)}${if (gap.length > 120) "…" else ""}")
+                            gapContext = buildString {
+                                if (!gapContext.isNullOrBlank()) appendLine(gapContext)
+                                append(gap)
+                            }.trim()
+
+                            val gapQuery = runCatching {
+                                llmService.generateOptimizedQuery(query, gapContext)
+                            }.getOrNull() ?: query
+                            appendLog("  Gap query: \"$gapQuery\"")
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Gap search (pass $pass)…" }
+
+                            val gapMeta = runCatching {
+                                webSearchService.searchMetadataOnly(gapQuery, 8)
+                            }.getOrElse { emptyList() }
+                            if (gapMeta.isEmpty()) { appendLog("  No results — stopping"); break }
+
+                            val gapScoreSummary = gapMeta.mapIndexed { i, r ->
+                                "${i + 1}. ${r.title}\n   ${r.snippet}"
+                            }.joinToString("\n")
+                            val gapScores = runCatching {
+                                llmService.scoreResults(gapScoreSummary, query)
+                            }.getOrElse { gapMeta.indices.map { Pair(it, 5) } }
+
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Fetching gap pages (pass $pass)…" }
+                            val gapPages = coroutineScope {
+                                gapScores.take(3).map { (idx, score) ->
+                                    val result = gapMeta.getOrNull(idx)
+                                    async {
+                                        if (result == null) return@async null
+                                        val url = result.realUrl ?: return@async null
+                                        val content = runCatching { webSearchService.fetchFullPage(url) }.getOrElse { "" }
+                                        if (content.isBlank()) null else Triple(score, result, content)
+                                    }
+                                }.awaitAll().filterNotNull()
+                            }
+
+                            for ((score, result, content) in gapPages) {
+                                val host = result.displayUrl.ifBlank { result.title }.take(50)
+                                withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $host…" }
+                                val extracted = runCatching {
+                                    llmService.extractRelevantInfo(content, gapQuery, query)
+                                }.getOrNull()
+                                if (!extracted.isNullOrBlank()) {
+                                    allFindings.add(Triple(gapQuery, result.title, extracted))
+                                    appendLog("  [$score/10] $host → extracted")
+                                    val chunk = "\n• ${result.title}: $extracted"
+                                    rollingContext = if (rollingContext.length + chunk.length > pageBudgetChars) {
+                                        runCatching { llmService.compressText(rollingContext + chunk, query) }.getOrNull()
+                                            ?: (rollingContext + chunk).takeLast(pageBudgetChars)
+                                    } else rollingContext + chunk
+                                }
+                            }
+
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Checking sufficiency (pass $pass)…" }
+                            val (suf2, _) = runCatching {
+                                llmService.evaluateSufficiency(rollingContext, query)
+                            }.getOrElse { Pair(false, 0) }
+                            appendLog("  Sufficiency: ${if (suf2) "YES" else "no"}")
+                            if (suf2) break
+                        }
+                    }
+
+                    // ── Stage 3: Draft-Gap Closure ─────────────────────────────
+                    if (!sufficientEarly && allFindings.isNotEmpty() && rollingContext.isNotBlank()) {
+                        appendLog("\n[Stage 3 — Draft-Gap Closure]")
+                        withContext(Dispatchers.Main) { _searchStatus.value = "Drafting answer…" }
+                        val draft = runCatching {
+                            llmService.generateAnswerDraft(query, rollingContext)
+                        }.getOrNull()
+                        if (!draft.isNullOrBlank()) {
+                            appendLog("  Draft: ${draft.take(100)}…")
+                            withContext(Dispatchers.Main) { _searchStatus.value = "Identifying gaps in draft…" }
+                            val holes = runCatching {
+                                llmService.identifyUnsupportedClaims(draft, query)
+                            }.getOrElse { emptyList() }
+                            if (holes.isEmpty()) {
+                                appendLog("  Draft complete — no gaps to fill")
+                            } else {
+                                appendLog("  ${holes.size} gaps: ${holes.joinToString(" | ")}")
+                                for (hole in holes) {
+                                    withContext(Dispatchers.Main) { _searchStatus.value = "Filling: ${hole.take(40)}…" }
+                                    appendLog("  Filling: $hole")
+                                    val holeQuery = "${query.take(60)} $hole"
+                                    val holeMeta = runCatching {
+                                        webSearchService.searchMetadataOnly(holeQuery, 5)
+                                    }.getOrElse { emptyList() }
+                                    if (holeMeta.isEmpty()) continue
+                                    val holePages = coroutineScope {
+                                        holeMeta.take(2).map { result ->
+                                            async {
+                                                val url = result.realUrl ?: return@async null
+                                                val content = runCatching { webSearchService.fetchFullPage(url) }.getOrElse { "" }
+                                                if (content.isBlank()) null else result to content
+                                            }
+                                        }.awaitAll().filterNotNull()
+                                    }
+                                    for ((result, content) in holePages) {
+                                        val extracted = runCatching {
+                                            llmService.extractRelevantInfo(content, holeQuery, query)
+                                        }.getOrNull()
+                                        if (!extracted.isNullOrBlank()) {
+                                            allFindings.add(Triple(holeQuery, result.title, extracted))
+                                            val chunk = "\n• ${result.title}: $extracted"
+                                            rollingContext = if (rollingContext.length + chunk.length > pageBudgetChars) {
+                                                runCatching { llmService.compressText(rollingContext + chunk, query) }.getOrNull()
+                                                    ?: (rollingContext + chunk).takeLast(pageBudgetChars)
+                                            } else rollingContext + chunk
+                                            appendLog("    → ${result.title.take(50)}: extracted")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Common exit ────────────────────────────────────────────
+                    appendLog("\n${allFindings.size} findings gathered.")
+                    withContext(Dispatchers.Main) {
+                        val finalLog = _searchLog.value
+                        if (!finalLog.isNullOrBlank()) {
+                            conv.messages.add(Message(
+                                role = MessageRole.USER,
+                                content = finalLog,
+                                isSearchLog = true
+                            ))
+                        }
+                        _searchLog.value = null
+                        _isSearching.value = false
+                        _searchStatus.value = null
+                    }
+                    if (allFindings.isEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            _currentConversation.value = conv.copy(messages = conv.messages)
+                            sendMessage(query)
+                        }
+                        return@launch
+                    }
+                    val scsUserMsg = Message(role = MessageRole.USER, content = query)
+                    val scsAssistant = Message(role = MessageRole.ASSISTANT, content = "", status = MessageStatus.STREAMING)
+                    withContext(Dispatchers.Main) {
+                        conv.messages.add(scsUserMsg)
+                        conv.messages.add(scsAssistant)
+                        _streamingText.value = ""
+                        _isGenerating.value = true
+                        _currentConversation.value = conv.copy(messages = conv.messages)
+                    }
+                    llmService.answerFromResearch(
+                        question = query,
+                        findings = allFindings,
+                        maxFindingsChars = (contextLength * 0.6 * 4).toInt(),
+                        onPartial = { partial ->
+                            viewModelScope.launch(Dispatchers.Main) {
+                                if (_isGenerating.value) _streamingText.value = partial
+                            }
+                        },
+                        onDone = {
+                            viewModelScope.launch(Dispatchers.Main) {
+                                val finalText = _streamingText.value
+                                _streamingText.value = ""
+                                _isGenerating.value = false
+                                scsAssistant.content = finalText.ifBlank { "*(no response — tap ↺ to retry)*" }
+                                scsAssistant.status = if (finalText.isBlank()) MessageStatus.ERROR else MessageStatus.DONE
+                                _currentConversation.value = conv.copy(messages = conv.messages)
+                                persistCurrentConversation()
+                            }
+                        },
+                        onError = { error ->
+                            viewModelScope.launch(Dispatchers.Main) {
+                                scsAssistant.content = _streamingText.value.ifEmpty { "Error: $error" }
+                                scsAssistant.status = MessageStatus.ERROR
+                                _streamingText.value = ""
+                                _isGenerating.value = false
+                                _errorMessage.value = error
+                                _currentConversation.value = conv.copy(messages = conv.messages)
+                            }
+                        }
+                    )
+                    return@launch
+                }
+
+                // ── Levels 3–6: Deep agentic pipeline ────────────────────────
+                if (level >= 3) {
                     // Config per level
                     data class DeepConfig(
                         val name: String,
@@ -450,9 +771,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val minPagesBeforeCheck: Int    // read at least N pages before first sufficiency check
                     )
                     val config = when (level) {
-                        3    -> DeepConfig("Super Deep",  5,  10, true,  5)
-                        4    -> DeepConfig("5-Forced",    1,   5, false, 0)
-                        5    -> DeepConfig("10-Forced",   1,  10, false, 0)
+                        4    -> DeepConfig("Super Deep",  5,  10, true,  5)
+                        5    -> DeepConfig("5-Forced",    1,   5, false, 0)
+                        6    -> DeepConfig("10-Forced",   1,  10, false, 0)
                         else -> DeepConfig("Deep",        5,  10, true,  0)
                     }
 
@@ -669,36 +990,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                // ── Levels 1–3: standard search pipeline ─────────────────────
-                var results = webSearchService.search(query, level, contextLength)
+                // ── Level 2 (Normal): standard search pipeline ───────────────
+                var results = webSearchService.search(query, 1, contextLength)
                 var synthesis: String? = null
-
-                if (level >= 2 && results.isNotEmpty()) {
-                    // ── Stage 1: compress each page individually ──────────────
-                    val pagesWithContent = results.count { it.pageContent != null }
-                    results = results.mapIndexed { i, result ->
-                        val raw = result.pageContent ?: return@mapIndexed result
-                        withContext(Dispatchers.Main) {
-                            _searchStatus.value = "Compressing page ${i + 1} / $pagesWithContent…"
-                        }
-                        val compressed = runCatching {
-                            llmService.compressText(raw, query)
-                        }.getOrNull()
-                        result.copy(pageContent = compressed ?: raw.take(300))
-                    }
-
-                    // ── Stage 2: synthesize all stage-1 summaries ─────────────
-                    val allSummaries = results.mapIndexedNotNull { i, r ->
-                        r.pageContent?.let { "${i + 1}. ${r.title}: $it" }
-                    }.joinToString("\n")
-
-                    if (allSummaries.isNotBlank()) {
-                        withContext(Dispatchers.Main) { _searchStatus.value = "Synthesizing findings…" }
-                        synthesis = runCatching {
-                            llmService.compressText(allSummaries, query)
-                        }.getOrNull()
-                    }
-                }
 
                 withContext(Dispatchers.Main) {
                     if (results.isEmpty()) {
