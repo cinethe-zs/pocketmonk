@@ -376,6 +376,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             },
             onDone = {
                 viewModelScope.launch(Dispatchers.Main) {
+                    // If stop was pressed, the message was already finalized by stopGeneration().
+                    if (assistantMessage.status != MessageStatus.STREAMING) return@launch
                     val finalText = _streamingText.value
                     _streamingText.value = ""
                     _isGenerating.value = false
@@ -420,6 +422,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             },
             onError = { error ->
                 viewModelScope.launch(Dispatchers.Main) {
+                    if (assistantMessage.status != MessageStatus.STREAMING) return@launch
                     assistantMessage.content = _streamingText.value.ifEmpty { "Error: $error" }
                     assistantMessage.status = MessageStatus.ERROR
                     _streamingText.value = ""
@@ -737,6 +740,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         },
                         onDone = {
                             viewModelScope.launch(Dispatchers.Main) {
+                                if (scsAssistant.status != MessageStatus.STREAMING) return@launch
                                 val finalText = _streamingText.value
                                 _streamingText.value = ""
                                 _isGenerating.value = false
@@ -748,6 +752,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         },
                         onError = { error ->
                             viewModelScope.launch(Dispatchers.Main) {
+                                if (scsAssistant.status != MessageStatus.STREAMING) return@launch
                                 scsAssistant.content = _streamingText.value.ifEmpty { "Error: $error" }
                                 scsAssistant.status = MessageStatus.ERROR
                                 _streamingText.value = ""
@@ -967,6 +972,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         },
                         onDone = {
                             viewModelScope.launch(Dispatchers.Main) {
+                                if (assistantMessage.status != MessageStatus.STREAMING) return@launch
                                 val finalText = _streamingText.value
                                 _streamingText.value = ""
                                 _isGenerating.value = false
@@ -978,6 +984,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         },
                         onError = { error ->
                             viewModelScope.launch(Dispatchers.Main) {
+                                if (assistantMessage.status != MessageStatus.STREAMING) return@launch
                                 assistantMessage.content = _streamingText.value.ifEmpty { "Error: $error" }
                                 assistantMessage.status = MessageStatus.ERROR
                                 _streamingText.value = ""
@@ -1054,9 +1061,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (_isSearching.value) {
             processingJob?.cancel()
             processingJob = null
+            llmService.cancel()
             _isSearching.value = false
             _searchStatus.value = null
             _searchLog.value = null
+            _isGenerating.value = false
+            _streamingText.value = ""
             return
         }
         llmService.cancel()

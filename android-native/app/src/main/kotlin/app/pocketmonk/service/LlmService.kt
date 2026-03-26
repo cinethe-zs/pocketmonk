@@ -281,9 +281,9 @@ class LlmService(private val context: Context) {
                     .trimStart('-', '*', '•', '·')
                     .trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == ' ' }
                     .trim()
-                    // Now remove surrounding quotes (if model wrapped queries in them)
-                    .removeSurrounding("\"")
-                    .removeSurrounding("'")
+                    // Strip ALL surrounding quotes (trim handles asymmetric cases)
+                    .trim('"')
+                    .trim('\'')
                     .trim()
             }
             .filter { it.length > 4 && !it.equals("SKIP", ignoreCase = true) }
@@ -677,8 +677,9 @@ class LlmService(private val context: Context) {
                 append("<start_of_turn>user\n")
                 append("Question: \"$question\"\n\nInformation gathered:\n")
                 append(gatheredInfo.take(4000))
-                append("\n\nDoes the information above contain enough specific facts to fully answer the question?\n")
-                append("Be strict: reply YES only if the information directly covers all main aspects of the question.\n")
+                append("\n\nDoes the information above contain SPECIFIC, VERIFIABLE facts that DIRECTLY and COMPLETELY answer the question?\n")
+                append("Reply YES only if the key facts are explicitly stated. Reply NO if the answer is vague, indirect, or incomplete.\n")
+                append("When in doubt, reply NO.\n")
                 append("Reply with only YES or NO.")
                 append("<end_of_turn>\n<start_of_turn>model\n")
             }
