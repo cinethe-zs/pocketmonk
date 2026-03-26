@@ -279,17 +279,19 @@ fun ChatScreen(
     LaunchedEffect(messages.size) {
         if (stuckToBottom && messages.isNotEmpty()) {
             isAutoScrolling = true
-            listState.animateScrollToItem(messages.size)
+            val last = listState.layoutInfo.totalItemsCount - 1
+            if (last >= 0) listState.animateScrollToItem(last)
             isAutoScrolling = false
         }
     }
 
-    // Auto-scroll: streaming token or document log appeared (instant — avoids animation stutter).
+    // Auto-scroll: any content grows (streaming tokens, log cards, transform/analyze buffers).
+    // Uses instant scroll to avoid animation stutter during rapid token updates.
     val lastMsgContent = messages.lastOrNull()?.content
-    LaunchedEffect(lastMsgContent, documentLog, ocrLog, audioLog) {
-        if (stuckToBottom && messages.isNotEmpty()) {
+    LaunchedEffect(lastMsgContent, streamingText, documentLog, ocrLog, audioLog, transformLog, analyzeIterationLogs.lastOrNull()) {
+        if (stuckToBottom && listState.layoutInfo.totalItemsCount > 0) {
             isAutoScrolling = true
-            listState.scrollToItem(messages.size)
+            listState.scrollToItem(listState.layoutInfo.totalItemsCount - 1)
             isAutoScrolling = false
         }
     }
