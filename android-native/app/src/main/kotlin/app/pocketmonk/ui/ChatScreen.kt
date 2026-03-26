@@ -1053,12 +1053,12 @@ private fun DocumentLogCard(
             .clip(RoundedCornerShape(8.dp))
             .background(Color(0xFF0D1117))
             .border(1.dp, Color(0xFF30363D), RoundedCornerShape(8.dp))
+            .clickable { onExpandToggle() }
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onExpandToggle() }
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Icon(
