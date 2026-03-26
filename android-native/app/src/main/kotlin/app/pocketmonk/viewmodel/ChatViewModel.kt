@@ -230,7 +230,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             appendLine("=== Response ===")
                             appendLine(response)
                             appendLine("=== Decision ===")
-                            append(if (response.uppercase().contains("TRANSFORM")) "TRANSFORM" else "ANALYZE")
+                            append(if (response.lowercase().contains("yes")) "TRANSFORM" else "ANALYZE")
                         }
                     }
                 }

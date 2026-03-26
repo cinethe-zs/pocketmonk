@@ -440,9 +440,9 @@ class LlmService(private val context: Context) {
         }
         val raw = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned() } ?: ""
         onLog(prompt, raw)
-        // "yes" = needs the whole doc = ANALYZE (map-reduce)
-        // "no"  = same operation on each chunk = TRANSFORM (stream)
-        if (raw.lowercase().contains("yes")) IntentResult("ANALYZE", null) else IntentResult("TRANSFORM", null)
+        // "yes" = can be applied chunk by chunk = TRANSFORM (stream)
+        // "no"  = needs global context across all chunks = ANALYZE (map-reduce)
+        if (raw.lowercase().contains("yes")) IntentResult("TRANSFORM", null) else IntentResult("ANALYZE", null)
     }
 
     /**
