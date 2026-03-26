@@ -111,6 +111,8 @@ fun ChatScreen(
     val searchLog by viewModel.searchLog.collectAsState()
     val isTranscribing by viewModel.isTranscribing.collectAsState()
     val transcriptionProgress by viewModel.transcriptionProgress.collectAsState()
+    val isMapReducing by viewModel.isMapReducing.collectAsState()
+    val mapReduceStatus by viewModel.mapReduceStatus.collectAsState()
     val documentLog by viewModel.documentLog.collectAsState()
     val ocrLog by viewModel.ocrLog.collectAsState()
     val audioLog by viewModel.audioLog.collectAsState()
@@ -587,6 +589,33 @@ fun ChatScreen(
                             .clip(RoundedCornerShape(2.dp)),
                         color = Accent,
                         trackColor = Border,
+                    )
+                }
+            }
+
+            // Map-reduce progress banner
+            AnimatedVisibility(
+                visible = isMapReducing,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SurfaceRaised)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        color = Accent,
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = mapReduceStatus ?: "Analyzing document…",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }

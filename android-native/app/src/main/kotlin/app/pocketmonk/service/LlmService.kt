@@ -325,6 +325,115 @@ class LlmService(private val context: Context) {
         runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().ifBlank { null } }
     }
 
+    // ── Map-reduce for long documents ─────────────────────────────────────────
+
+    /**
+     * Processes a document too large to fit in the context window using map-reduce:
+     * MAP:    split into ~7000-char chunks, extract facts relevant to [question] from each
+     * REDUCE: iteratively compress batches of extractions until they fit in 7000 chars
+     * Returns the final synthesis to use as documentContent in the chat() call.
+     */
+    suspend fun mapReduceDocument(
+        document: String,
+        question: String,
+        onProgress: (String) -> Unit,
+    ): String = withContext(Dispatchers.IO) {
+        val eng = engine ?: return@withContext ""
+
+        fun splitIntoChunks(text: String, maxChars: Int): List<String> {
+            val chunks = mutableListOf<String>()
+            var start = 0
+            while (start < text.length) {
+                if (start + maxChars >= text.length) {
+                    val tail = text.substring(start).trim()
+                    if (tail.isNotBlank()) chunks.add(tail)
+                    break
+                }
+                val window = text.substring(start, start + maxChars)
+                val minSplit = maxChars / 2
+                val splitAt = listOf(
+                    window.lastIndexOf("\n\n"),
+                    window.lastIndexOf('\n'),
+                    window.lastIndexOf(". "),
+                    window.lastIndexOf(' '),
+                ).filter { it > minSplit }
+                 .maxOrNull()
+                 ?: (maxChars - 1)
+                chunks.add(window.substring(0, splitAt + 1).trim())
+                start += splitAt + 1
+            }
+            return chunks.filter { it.isNotBlank() }
+        }
+
+        fun extractChunk(chunk: String): String? {
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Question: \"$question\"\n\n")
+                append("From the excerpt below, extract only the facts relevant to answering the question. ")
+                append("Be concise. If nothing is relevant, reply exactly: NONE\n\n")
+                append(chunk)
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            val r = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned() }
+            return if (r == null || r.isBlank() || r.equals("NONE", ignoreCase = true)) null else r
+        }
+
+        fun compressBatch(batch: String): String? {
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Question: \"$question\"\n\n")
+                append("Synthesize the following extracted facts into a concise summary relevant to the question. ")
+                append("Keep your response under 3000 characters.\n\n")
+                append(batch)
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+            return runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned().ifBlank { null } }
+        }
+
+        fun packIntoBatches(parts: List<String>, maxChars: Int): List<String> {
+            val batches = mutableListOf<String>()
+            val current = StringBuilder()
+            for (part in parts) {
+                if (current.isNotEmpty() && current.length + part.length + 7 > maxChars) {
+                    batches.add(current.toString().trim())
+                    current.clear()
+                }
+                if (current.isNotEmpty()) current.append("\n\n---\n\n")
+                current.append(part)
+            }
+            if (current.isNotEmpty()) batches.add(current.toString().trim())
+            return batches
+        }
+
+        fun reduce(parts: List<String>, pass: Int): List<String> {
+            val joined = parts.joinToString("\n\n---\n\n")
+            if (joined.length <= 7000) return parts
+            val batches = packIntoBatches(parts, 7000)
+            val compressed = mutableListOf<String>()
+            batches.forEachIndexed { i, batch ->
+                onProgress("Synthesizing (pass $pass, batch ${i + 1}/${batches.size})…")
+                val r = compressBatch(batch)
+                if (r != null) compressed.add(r)
+            }
+            return if (compressed.isEmpty()) listOf(parts.first())
+            else reduce(compressed, pass + 1)
+        }
+
+        // MAP
+        val chunks = splitIntoChunks(document, 7000)
+        val mapped = mutableListOf<String>()
+        chunks.forEachIndexed { i, chunk ->
+            onProgress("Analyzing section ${i + 1} of ${chunks.size}…")
+            val r = extractChunk(chunk)
+            if (r != null) mapped.add(r)
+        }
+        if (mapped.isEmpty()) return@withContext ""
+
+        // REDUCE
+        val reduced = reduce(mapped, 1)
+        reduced.joinToString("\n\n---\n\n")
+    }
+
     suspend fun generateTitleFromContext(ctx: String): String? = withContext(Dispatchers.IO) {
         val eng = engine ?: return@withContext null
         val prompt = buildString {

@@ -75,6 +75,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _transcriptionProgress = MutableStateFlow(0f)
     val transcriptionProgress: StateFlow<Float> = _transcriptionProgress.asStateFlow()
 
+    private val _isMapReducing = MutableStateFlow(false)
+    val isMapReducing: StateFlow<Boolean> = _isMapReducing.asStateFlow()
+
+    private val _mapReduceStatus = MutableStateFlow<String?>(null)
+    val mapReduceStatus: StateFlow<String?> = _mapReduceStatus.asStateFlow()
+
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
 
@@ -199,22 +205,53 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val userMessage = Message(
-            role = MessageRole.USER,
-            content = text.trim(),
-        )
+        val userMessage = Message(role = MessageRole.USER, content = text.trim())
         conv.messages.add(userMessage)
         _currentConversation.value = conv.copy(messages = conv.messages)
+        _isGenerating.value = true
+        _streamingText.value = ""
+        _errorMessage.value = null
 
+        val docContent = _documentContent.value
+        if (docContent != null && docContent.length > 8000) {
+            // Long document: run map-reduce before chat
+            _isMapReducing.value = true
+            _mapReduceStatus.value = "Preparing…"
+            viewModelScope.launch {
+                val synthesis = try {
+                    llmService.mapReduceDocument(docContent, text) { status ->
+                        viewModelScope.launch(Dispatchers.Main) { _mapReduceStatus.value = status }
+                    }
+                } catch (e: Throwable) {
+                    withContext(Dispatchers.Main) {
+                        _isMapReducing.value = false
+                        _mapReduceStatus.value = null
+                        _isGenerating.value = false
+                        conv.messages.remove(userMessage)
+                        _currentConversation.value = conv.copy(messages = conv.messages)
+                        _errorMessage.value = "Failed to analyze document: ${e.message}"
+                    }
+                    return@launch
+                }
+                withContext(Dispatchers.Main) {
+                    _isMapReducing.value = false
+                    _mapReduceStatus.value = null
+                    doChat(conv, userMessage, synthesis.ifBlank { null })
+                }
+            }
+        } else {
+            doChat(conv, userMessage, docContent)
+        }
+    }
+
+    private fun doChat(conv: Conversation, userMessage: Message, documentContent: String?) {
         val assistantMessage = Message(
             role = MessageRole.ASSISTANT,
             content = "",
-            status = MessageStatus.STREAMING
+            status = MessageStatus.STREAMING,
         )
         conv.messages.add(assistantMessage)
-        _streamingText.value = ""
-        _isGenerating.value = true
-        _errorMessage.value = null
+        _currentConversation.value = conv.copy(messages = conv.messages)
 
         val contextSummary = conv.messages.firstOrNull { it.isSummary }?.content
         val baseHistory = conv.messages.filter {
@@ -227,13 +264,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             systemPrompt = conv.systemPrompt,
             contextSummary = contextSummary,
             documentName = _documentName.value,
-            documentContent = _documentContent.value,
+            documentContent = documentContent,
             temperature = conv.temperature,
             onPartial = { partial ->
                 viewModelScope.launch(Dispatchers.Main) {
-                    if (_isGenerating.value) {
-                        _streamingText.value = partial
-                    }
+                    if (_isGenerating.value) _streamingText.value = partial
                 }
             },
             onDone = {
@@ -765,10 +800,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadDocument(name: String, content: String) {
-        val truncated = content.take(8000)
         _documentName.value = name
-        _documentContent.value = truncated
-        _documentLog.value = truncated
+        _documentContent.value = content
+        _documentLog.value = content.take(8000)
         _ocrLog.value = null
         _audioLog.value = null
     }
@@ -857,12 +891,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _audioLog.value = null
                         _errorMessage.value = "No speech detected in \"$name\"."
                     } else {
-                        val truncated = transcript.take(8000)
                         _documentName.value = name
-                        _documentContent.value = "Audio transcript:\n$truncated"
+                        _documentContent.value = "Audio transcript:\n$transcript"
                         _documentLog.value = null
                         _ocrLog.value = null
-                        _audioLog.value = truncated
+                        _audioLog.value = transcript.take(8000)
                     }
                 }
                 return@launch
@@ -925,7 +958,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _audioLog.value = null
                     } else {
                         _documentName.value = name
-                        _documentContent.value = combined.take(8000)
+                        _documentContent.value = combined
                         _documentLog.value = null
                         _ocrLog.value = ocrText.take(8000).takeIf { it.isNotBlank() }
                         _audioLog.value = audioText.take(8000).takeIf { it.isNotBlank() }
