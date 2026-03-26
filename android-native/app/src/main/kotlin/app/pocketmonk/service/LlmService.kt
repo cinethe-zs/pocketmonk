@@ -275,12 +275,16 @@ class LlmService(private val context: Context) {
             .replace("\\n", "\n")
             .replace("\\r", "")
             .lines()
-            .map { it.trim()
-                .removeSurrounding("\"")
-                .removeSurrounding("'")
-                .trimStart('-', '*', '•', '·')
-                .trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == ' ' }
-                .trim()
+            .map { line ->
+                line.trim()
+                    // Strip numbering/bullets before removing quotes
+                    .trimStart('-', '*', '•', '·')
+                    .trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == ' ' }
+                    .trim()
+                    // Now remove surrounding quotes (if model wrapped queries in them)
+                    .removeSurrounding("\"")
+                    .removeSurrounding("'")
+                    .trim()
             }
             .filter { it.length > 4 && !it.equals("SKIP", ignoreCase = true) }
             .distinct()
@@ -624,6 +628,7 @@ class LlmService(private val context: Context) {
             }
             runSession(eng) { session ->
                 session.generateContent(listOf(InputData.Text(prompt))).trim()
+                    .replace("\\n", "\n").replace("\\r", "")
                     .lines().firstOrNull { it.isNotBlank() }
                     ?.trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == '-' || c == '*' || c == '•' || c == ' ' }
                     ?.trim()?.removeSurrounding("\"")?.removeSurrounding("'")
