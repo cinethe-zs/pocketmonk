@@ -81,6 +81,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _mapReduceStatus = MutableStateFlow<String?>(null)
     val mapReduceStatus: StateFlow<String?> = _mapReduceStatus.asStateFlow()
 
+    private val _classifierLog = MutableStateFlow<String?>(null)
+    val classifierLog: StateFlow<String?> = _classifierLog.asStateFlow()
+
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
 
@@ -218,11 +221,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _isMapReducing.value = true
             _mapReduceStatus.value = "Classifying request…"
             viewModelScope.launch {
-                val classification = llmService.classifyIntent(text)
+                val classification = llmService.classifyIntentLlm(text) { prompt, response ->
+                    viewModelScope.launch(Dispatchers.Main) {
+                        _classifierLog.value = buildString {
+                            appendLine("=== Prompt ===")
+                            appendLine(prompt)
+                            appendLine("=== Response ===")
+                            appendLine(response)
+                            appendLine("=== Decision ===")
+                            append(if (response.uppercase().contains("TRANSFORM")) "TRANSFORM" else "ANALYZE")
+                        }
+                    }
+                }
                 val intent = classification.intent
-                val intentLabel = if (classification.matchedKeyword != null)
-                    "TRANSFORM (keyword: \"${classification.matchedKeyword}\")"
-                else "ANALYZE"
+                val intentLabel = intent
 
                 if (intent == "TRANSFORM") {
                     // Stream: apply instruction chunk-by-chunk, concatenate results
@@ -869,6 +881,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _documentLog.value = null
         _ocrLog.value = null
         _audioLog.value = null
+        _classifierLog.value = null
     }
 
     fun loadDocumentFromUri(uri: android.net.Uri) {

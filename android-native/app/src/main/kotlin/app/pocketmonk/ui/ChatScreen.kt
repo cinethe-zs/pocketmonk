@@ -114,6 +114,7 @@ fun ChatScreen(
     val transcriptionProgress by viewModel.transcriptionProgress.collectAsState()
     val isMapReducing by viewModel.isMapReducing.collectAsState()
     val mapReduceStatus by viewModel.mapReduceStatus.collectAsState()
+    val classifierLog by viewModel.classifierLog.collectAsState()
     val documentLog by viewModel.documentLog.collectAsState()
     val ocrLog by viewModel.ocrLog.collectAsState()
     val audioLog by viewModel.audioLog.collectAsState()
@@ -511,6 +512,14 @@ fun ChatScreen(
                                 content = audioLog!!,
                                 expanded = audioLogExpanded,
                                 onExpandToggle = { audioLogExpanded = !audioLogExpanded },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                    if (classifierLog != null) {
+                        item(key = "classifier_log") {
+                            ClassifierLogCard(
+                                log = classifierLog!!,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -1094,6 +1103,55 @@ private fun DocumentLogCard(
         if (expanded) {
             Text(
                 text = content,
+                color = Color(0xFFE6EDF3),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ClassifierLogCard(log: String, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF0D1117))
+            .border(1.dp, Color(0xFF3D3000), RoundedCornerShape(8.dp))
+            .clickable { expanded = !expanded }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                Icons.Filled.Tune,
+                contentDescription = null,
+                tint = Color(0xFFD4A017),
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "Classifier",
+                color = Color(0xFFD4A017),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = Color(0xFF8B949E),
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        if (expanded) {
+            Text(
+                text = log,
                 color = Color(0xFFE6EDF3),
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)

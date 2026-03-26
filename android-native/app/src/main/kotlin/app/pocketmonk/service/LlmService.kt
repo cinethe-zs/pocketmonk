@@ -419,12 +419,42 @@ class LlmService(private val context: Context) {
     data class IntentResult(val intent: String, val matchedKeyword: String?)
 
     /**
-     * Classifies whether [question] is a TRANSFORM request (translate, rewrite, fix, format…)
-     * or an ANALYZE request (summarize, explain, answer, extract…).
-     * Uses keyword matching — deterministic and instant, no LLM call.
+     * LLM-based classifier. Sends a few-shot prompt to the model and logs both the prompt
+     * and the raw response via [onLog]. Falls back to ANALYZE on any failure.
+     */
+    suspend fun classifyIntentLlm(
+        question: String,
+        onLog: (prompt: String, response: String) -> Unit,
+    ): IntentResult = withContext(Dispatchers.IO) {
+        val eng = engine ?: return@withContext IntentResult("ANALYZE", null)
+        val prompt = buildString {
+            append("<start_of_turn>user\n")
+            append("Classify the request below as TRANSFORM or ANALYZE. Reply with that single word only.\n\n")
+            append("TRANSFORM = modify or produce new text (translate, rewrite, fix, format, convert, correct, replace, paraphrase, improve style)\n")
+            append("ANALYZE = answer a question or extract information (summarize, explain, find, list, what, why, who, when)\n\n")
+            append("Examples:\n")
+            append("\"translate to French\" -> TRANSFORM\n")
+            append("\"replace all occurrences of X with Y\" -> TRANSFORM\n")
+            append("\"fix the grammar\" -> TRANSFORM\n")
+            append("\"rewrite in a formal tone\" -> TRANSFORM\n")
+            append("\"summarize\" -> ANALYZE\n")
+            append("\"what are the key points?\" -> ANALYZE\n")
+            append("\"who is mentioned?\" -> ANALYZE\n\n")
+            append("Request: \"$question\"\n")
+            append("<end_of_turn>\n<start_of_turn>model\n")
+        }
+        val raw = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned() } ?: ""
+        onLog(prompt, raw)
+        val upper = raw.uppercase()
+        if (upper.contains("TRANSFORM")) IntentResult("TRANSFORM", null) else IntentResult("ANALYZE", null)
+    }
+
+    /**
+     * Keyword-based classifier — deterministic, instant, no LLM call.
+     * Kept as fallback / future reuse.
      * Returns [IntentResult] with the intent and the keyword that triggered it (null for ANALYZE).
      */
-    fun classifyIntent(question: String): IntentResult {
+    fun classifyIntentByKeyword(question: String): IntentResult {
         val q = question.lowercase()
         val transformKeywords = listOf(
             // English
