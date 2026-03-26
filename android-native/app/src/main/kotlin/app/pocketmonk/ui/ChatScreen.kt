@@ -674,7 +674,7 @@ fun ChatScreen(
                 NewConversationDialog(
                     modelManager = viewModel.modelManager,
                     currentModelPath = viewModel.modelManager.getActiveModelPath(),
-                    currentContextSize = currentConversation?.contextSize ?: 2048,
+                    currentContextSize = 4096,
                     currentTemperature = currentConversation?.temperature?.takeIf { it >= 0.1f } ?: 1.0f,
                     personas = personas,
                     onConfirm = { modelPath, contextSize, temperature, systemPrompt ->

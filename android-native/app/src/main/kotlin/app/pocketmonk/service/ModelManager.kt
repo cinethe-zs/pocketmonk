@@ -41,32 +41,14 @@ class ModelManager(private val context: Context) {
 
     val catalog: List<ModelEntry> = listOf(
         ModelEntry(
-            id = "gemma3-1b-int4",
-            name = "Gemma 3 1B IT (INT4)",
-            filename = "gemma3-1b-it-int4.task",
-            sizeLabel = "~600 MB",
-            description = "Fastest. Recommended for Pixel 7a.",
-            hfRepo = "litert-community/Gemma3-1B-IT",
-            hfFilename = "gemma3-1b-it-int4.task",
-            recommendedForPixel7a = true,
-        ),
-        ModelEntry(
             id = "gemma3-1b-int4-4k",
-            name = "Gemma 3 1B IT (INT4, 4096 ctx)",
+            name = "Gemma 3 1B IT (INT4)",
             filename = "Gemma3-1B-IT_multi-prefill-seq_q4_block128_ekv4096.task",
             sizeLabel = "~700 MB",
-            description = "Larger context window (4096 tokens).",
+            description = "Private on-device AI assistant.",
             hfRepo = "litert-community/Gemma3-1B-IT",
             hfFilename = "Gemma3-1B-IT_multi-prefill-seq_q4_block128_ekv4096.task",
-        ),
-        ModelEntry(
-            id = "gemma2-2b-int8",
-            name = "Gemma 2 2B IT (INT8)",
-            filename = "Gemma2-2B-IT_multi-prefill-seq_q8_ekv1280.task",
-            sizeLabel = "~2.6 GB",
-            description = "Better quality, needs 3+ GB free RAM.",
-            hfRepo = "litert-community/Gemma2-2B-IT",
-            hfFilename = "Gemma2-2B-IT_multi-prefill-seq_q8_ekv1280.task",
+            recommendedForPixel7a = true,
         ),
     )
 

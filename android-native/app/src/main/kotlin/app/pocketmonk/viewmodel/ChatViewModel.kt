@@ -132,7 +132,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val streamingText: StateFlow<String> = _streamingText.asStateFlow()
 
     val contextLength: Int
-        get() = _currentConversation.value?.contextSize ?: 2048
+        get() = _currentConversation.value?.contextSize ?: 4096
 
     // Message to send after auto-compress finishes
     private var _pendingSendText: String? = null
@@ -151,7 +151,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     private var currentModelPath: String? = null
-    private var currentContextSize: Int = 2048
+    private var currentContextSize: Int = 4096
     private var consecutiveRetries = 0
 
     init {
@@ -161,7 +161,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _personas.value = personaStore.load()
     }
 
-    fun initModel(modelPath: String, contextSize: Int = 2048) {
+    fun initModel(modelPath: String, contextSize: Int = 4096) {
         currentModelPath = modelPath
         currentContextSize = contextSize
         viewModelScope.launch {

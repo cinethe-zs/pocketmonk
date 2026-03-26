@@ -24,7 +24,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,8 +42,6 @@ import app.pocketmonk.ui.theme.TextSecondary
 import java.io.File
 import kotlin.math.roundToInt
 
-private val CONTEXT_SIZES = listOf(512, 1024, 2048, 4096)
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun NewConversationDialog(
@@ -61,7 +58,6 @@ fun NewConversationDialog(
 
     val initialPath = currentModelPath ?: localFiles.firstOrNull()?.absolutePath ?: ""
     var selectedPath by remember { mutableStateOf(initialPath) }
-    var selectedContextSize by remember { mutableIntStateOf(currentContextSize) }
     var selectedTemperature by remember { mutableFloatStateOf(currentTemperature) }
     var selectedPersonaId by remember { mutableStateOf<String?>(null) }
 
@@ -126,24 +122,6 @@ fun NewConversationDialog(
 
                 Spacer(Modifier.height(16.dp))
 
-                // ── Context size ─────────────────────────────────────────────
-                Text("Context Size", style = MaterialTheme.typography.labelMedium, color = TextMuted)
-                Spacer(Modifier.height(8.dp))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CONTEXT_SIZES.forEach { size ->
-                        ContextSizeChip(
-                            label = if (size >= 1024) "${size / 1024}K" else "$size",
-                            isSelected = size == selectedContextSize,
-                            onClick = { selectedContextSize = size }
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(16.dp))
-
                 // ── Temperature ──────────────────────────────────────────────
                 val tempLabel = when {
                     selectedTemperature < 0.4f -> "Precise"
@@ -192,7 +170,7 @@ fun NewConversationDialog(
                 onClick = {
                     if (selectedPath.isNotBlank()) {
                         val systemPrompt = personas.find { it.id == selectedPersonaId }?.systemPrompt
-                        onConfirm(selectedPath, selectedContextSize, selectedTemperature, systemPrompt)
+                        onConfirm(selectedPath, 4096, selectedTemperature, systemPrompt)
                     }
                 },
                 enabled = selectedPath.isNotBlank()
