@@ -12,8 +12,8 @@ android {
         applicationId = "app.pocketmonk"
         minSdk = 28
         targetSdk = 36
-        versionCode = 115
-        versionName = "3.30.5"
+        versionCode = 116
+        versionName = "3.30.6"
 
     }
 

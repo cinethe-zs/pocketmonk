@@ -549,7 +549,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $host…" }
                             appendLog("  [$score/10] $host — ${content.length} chars")
                             val extracted = runCatching {
-                                llmService.extractRelevantInfo(content, q, query)
+                                llmService.mapReduceDocument(content, query, {})
                             }.getOrNull()
                             if (!extracted.isNullOrBlank()) {
                                 allFindings.add(Triple(q, result.title, extracted))
@@ -625,7 +625,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 val host = result.displayUrl.ifBlank { result.title }.take(50)
                                 withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $host…" }
                                 val extracted = runCatching {
-                                    llmService.extractRelevantInfo(content, gapQuery, query)
+                                    llmService.mapReduceDocument(content, query, {})
                                 }.getOrNull()
                                 if (!extracted.isNullOrBlank()) {
                                     allFindings.add(Triple(gapQuery, result.title, extracted))
@@ -683,7 +683,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                     for ((result, content) in holePages) {
                                         val extracted = runCatching {
-                                            llmService.extractRelevantInfo(content, holeQuery, query)
+                                            llmService.mapReduceDocument(content, query, {})
                                         }.getOrNull()
                                         if (!extracted.isNullOrBlank()) {
                                             allFindings.add(Triple(holeQuery, result.title, extracted))
@@ -871,7 +871,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             appendLog("    -> ${fullContent.length} chars — extracting…")
                             withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $displayHost…" }
                             val extracted = runCatching {
-                                llmService.extractRelevantInfo(fullContent, optimizedQuery, query)
+                                llmService.mapReduceDocument(fullContent, query, {})
                             }.getOrNull()
                             if (!extracted.isNullOrBlank()) {
                                 allFindings.add(Triple(optimizedQuery, result.title, extracted))
