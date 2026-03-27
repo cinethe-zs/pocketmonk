@@ -200,11 +200,11 @@ class LlmService(private val context: Context) {
                         override fun onDone() {
                             mainHandler.removeCallbacks(watchdog)
                             mainHandler.post {
-                                // Close conversation immediately so nativeDeleteConversation()
-                                // has maximum time to complete before the next createConversation().
-                                val conv = currentConversation
+                                // Use the local `conversation` capture, not currentConversation —
+                                // cancel() may have already null'd currentConversation, and we must
+                                // still close to avoid a native leak.
                                 currentConversation = null
-                                try { conv?.close() } catch (_: Throwable) {}
+                                try { conversation.close() } catch (_: Throwable) {}
                                 isInferring = false
                                 onDone()
                             }
@@ -213,9 +213,8 @@ class LlmService(private val context: Context) {
                         override fun onError(throwable: Throwable) {
                             mainHandler.removeCallbacks(watchdog)
                             mainHandler.post {
-                                val conv = currentConversation
                                 currentConversation = null
-                                try { conv?.close() } catch (_: Throwable) {}
+                                try { conversation.close() } catch (_: Throwable) {}
                                 isInferring = false
                                 if (throwable is CancellationException) onDone()
                                 else onErrorOuter(throwable.message ?: "Unknown error during inference")
@@ -944,12 +943,13 @@ class LlmService(private val context: Context) {
 
     fun cancel() {
         isInferring = false
+        // Only signal cancellation — do NOT call close() here.
+        // close() is owned by the callbacks / runSession finally-block.
+        // Calling close() from cancel() races with the callback's own close() → SIGABRT double-free.
         val conv = currentConversation; currentConversation = null
         try { conv?.cancelProcess() } catch (_: Throwable) {}
-        try { conv?.close() } catch (_: Throwable) {}
         val sess = currentSession; currentSession = null
         try { sess?.cancelProcess() } catch (_: Throwable) {}
-        try { sess?.close() } catch (_: Throwable) {}
     }
 
     fun dispose() {
