@@ -140,7 +140,7 @@ fun ChatScreen(
     var showNewConversationDialog by remember { mutableStateOf(false) }
     var showDocumentDialog by remember { mutableStateOf(false) }
     var showPersonaDialog by remember { mutableStateOf(false) }
-    // 0 = off, 1 = Normal, 2 = Deep, 3 = Super Deep, 4 = 5-Forced, 5 = 10-Forced
+    // 0 = off, 1 = websearch
     var searchLevel by rememberSaveable { mutableStateOf(0) }
 
     val filePicker = rememberLauncherForActivityResult(
@@ -800,16 +800,8 @@ fun ChatScreen(
                                     color = Accent
                                 )
                             } else {
-                                val (levelLabel, levelDesc) = when (searchLevel) {
-                                    1 -> "SCS" to "snippet oracle · parallel queries · gap closure"
-                                    2 -> "Normal" to "6 results · reads top 2 pages"
-                                    3 -> "Deep" to "agentic · up to 10 pages · sufficiency check"
-                                    4 -> "Super Deep" to "agentic · reads 5 before sufficiency check"
-                                    5 -> "5-Forced" to "reads top 5 pages · no sufficiency check"
-                                    else -> "10-Forced" to "reads top 10 pages · no sufficiency check"
-                                }
                                 Text(
-                                    "$levelLabel search · $levelDesc · Send to run",
+                                    "Websearch · 6 results · reads top 2 pages · Send to run",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = Accent
                                 )
@@ -914,9 +906,9 @@ fun ChatScreen(
                             )
                         }
                         Spacer(Modifier.width(4.dp))
-                        // Search level button — cycles 0→1→2→3→0
+                        // Websearch toggle button — cycles off → on → off
                         IconButton(
-                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 7 },
+                            onClick = { if (!isGenerating && !isSearching) searchLevel = (searchLevel + 1) % 2 },
                             enabled = modelReady && !isGenerating && !isCompressing && !isSearching,
                             modifier = Modifier.size(44.dp)
                         ) {
@@ -927,26 +919,12 @@ fun ChatScreen(
                                     strokeWidth = 2.dp
                                 )
                             } else {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Filled.Search,
-                                        contentDescription = "Web search depth",
-                                        tint = if (searchLevel > 0) Accent else TextMuted,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    if (searchLevel > 0) {
-                                        Text(
-                                            "$searchLevel",
-                                            style = MaterialTheme.typography.labelSmall.copy(
-                                                fontSize = androidx.compose.ui.unit.TextUnit(8f, androidx.compose.ui.unit.TextUnitType.Sp)
-                                            ),
-                                            color = Accent,
-                                            modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .padding(bottom = 1.dp, end = 1.dp)
-                                        )
-                                    }
-                                }
+                                Icon(
+                                    Icons.Filled.Search,
+                                    contentDescription = "Websearch",
+                                    tint = if (searchLevel > 0) Accent else TextMuted,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         }
                         // Mic button
@@ -977,10 +955,10 @@ fun ChatScreen(
                                 } else if (inputText.isNotBlank() && modelReady) {
                                     val text = inputText.trim()
                                     inputText = ""
-                                    val level = searchLevel
+                                    val useSearch = searchLevel > 0
                                     searchLevel = 0
-                                    if (level > 0) {
-                                        viewModel.searchAndSend(text, level)
+                                    if (useSearch) {
+                                        viewModel.searchAndSend(text)
                                     } else {
                                         viewModel.sendMessage(text)
                                     }
