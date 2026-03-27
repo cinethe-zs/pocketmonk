@@ -445,6 +445,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         processingJob = viewModelScope.launch {
             try {
+                // Tag conversation as web-searched immediately
+                withContext(Dispatchers.Main) {
+                    if (!conv.tags.contains("web")) {
+                        conv.tags.add("web")
+                        _currentConversation.value = conv.copy(messages = conv.messages)
+                        persistCurrentConversation()
+                    }
+                }
+
                 // ── Level 1: Stratified Convergent Search ──────────────────────
                 if (level == 1) {
                     val pageBudgetChars = (contextLength * 0.5 * 4).toInt()
@@ -544,6 +553,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
 
                         for ((score, rq, content) in fetchedPages) {
+                            if (sufficientEarly) break
                             val (result, q) = rq
                             val host = result.displayUrl.ifBlank { result.title }.take(50)
                             withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $host…" }
@@ -559,18 +569,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         ?: (rollingContext + chunk).takeLast(pageBudgetChars)
                                 } else rollingContext + chunk
                                 extracted.lines().forEach { appendLog("      $it") }
+                                withContext(Dispatchers.Main) { _searchStatus.value = "Checking sufficiency…" }
+                                val (sufPage, _) = runCatching {
+                                    llmService.evaluateSufficiency(rollingContext, query) { appendLog("  $it") }
+                                }.getOrElse { Pair(false, 0) }
+                                if (sufPage) {
+                                    appendLog("  Sufficient after $host — stopping Stage 1 early")
+                                    sufficientEarly = true
+                                }
                             } else appendLog("    → nothing relevant")
                         }
                         appendLog("  Stage 1 done: ${allFindings.size} findings")
-
-                        if (rollingContext.isNotBlank()) {
-                            withContext(Dispatchers.Main) { _searchStatus.value = "Checking sufficiency…" }
-                            val (suf1, _) = runCatching {
-                                llmService.evaluateSufficiency(rollingContext, query) { appendLog("  $it") }
-                            }.getOrElse { Pair(false, 0) }
-                            appendLog("  Sufficiency after Stage 1: ${if (suf1) "YES" else "no"}")
-                            if (suf1) sufficientEarly = true
-                        }
                     }
 
                     // ── Stage 2: Deep Extraction Loop (2 passes) ──────────────

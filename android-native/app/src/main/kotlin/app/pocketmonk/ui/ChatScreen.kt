@@ -972,7 +972,7 @@ fun ChatScreen(
                         // Send / Stop button
                         IconButton(
                             onClick = {
-                                if (isGenerating) {
+                                if (isGenerating || isSearching) {
                                     viewModel.stopGeneration()
                                 } else if (inputText.isNotBlank() && modelReady) {
                                     val text = inputText.trim()
@@ -986,23 +986,22 @@ fun ChatScreen(
                                     }
                                 }
                             },
-                            enabled = modelReady && !isCompressing && !isSearching && (isGenerating || inputText.isNotBlank()),
+                            enabled = modelReady && !isCompressing && (isGenerating || isSearching || inputText.isNotBlank()),
                             modifier = Modifier
                                 .size(48.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(
                                     when {
-                                        !modelReady || isCompressing || isSearching -> TextMuted
-                                        isGenerating -> Error
+                                        !modelReady || isCompressing -> TextMuted
+                                        isGenerating || isSearching -> Error
                                         inputText.isBlank() -> TextMuted
-                                        searchLevel > 0 -> Accent
                                         else -> Accent
                                     }
                                 )
                         ) {
                             Icon(
-                                imageVector = if (isGenerating) Icons.Filled.Stop else Icons.Filled.Send,
-                                contentDescription = if (isGenerating) "Stop" else "Send",
+                                imageVector = if (isGenerating || isSearching) Icons.Filled.Stop else Icons.Filled.Send,
+                                contentDescription = if (isGenerating || isSearching) "Stop" else "Send",
                                 tint = TextPrimary,
                                 modifier = Modifier.size(20.dp)
                             )
