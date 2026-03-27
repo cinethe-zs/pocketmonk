@@ -278,13 +278,12 @@ class LlmService(private val context: Context) {
             .lines()
             .map { line ->
                 line.trim()
-                    // Strip numbering/bullets before removing quotes
+                    // Strip bullets / numbering
                     .trimStart('-', '*', '•', '·')
                     .trimStart { c -> c.isDigit() || c == '.' || c == ')' || c == ' ' }
                     .trim()
-                    // Strip ALL surrounding quotes (trim handles asymmetric cases)
-                    .trim('"')
-                    .trim('\'')
+                    // Strip ALL surrounding quotes (robust)
+                    .replace(Regex("""^[\s"'“”„‟″]+|[\s"'“”„‟″]+$"""), "")
                     .trim()
             }
             .filter { it.length > 4 && !it.equals("SKIP", ignoreCase = true) }
@@ -784,12 +783,14 @@ class LlmService(private val context: Context) {
 
     fun cancel() {
         isInferring = false
+        // Only signal cancellation — do NOT call close() here.
+        // The MessageCallback/ResponseCallback owns the lifecycle and calls close()
+        // in its onDone/onError. Calling close() from a different thread while the
+        // callback is still running causes a double-free native crash (SIGABRT).
         val conv = currentConversation; currentConversation = null
         try { conv?.cancelProcess() } catch (_: Throwable) {}
-        try { conv?.close() } catch (_: Throwable) {}
         val sess = currentSession; currentSession = null
         try { sess?.cancelProcess() } catch (_: Throwable) {}
-        try { sess?.close() } catch (_: Throwable) {}
     }
 
     fun dispose() {
