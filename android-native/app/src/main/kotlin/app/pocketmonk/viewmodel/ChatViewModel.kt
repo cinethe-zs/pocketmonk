@@ -475,7 +475,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         appendLog("  ${snippetResults.size} snippets — checking sufficiency…")
                         withContext(Dispatchers.Main) { _searchStatus.value = "Checking snippets…" }
                         val (suf0, _) = runCatching {
-                            llmService.evaluateSufficiency(snippetCtx, query)
+                            llmService.evaluateSufficiency(snippetCtx, query) { appendLog("  $it") }
                         }.getOrElse { Pair(false, 0) }
                         appendLog("  Sufficient from snippets: ${if (suf0) "YES — fast path" else "no"}")
                         if (suf0) {
@@ -549,13 +549,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $host…" }
                             appendLog("  [$score/10] $host — ${content.length} chars")
                             val extracted = runCatching {
-                                llmService.mapReduceDocument(content, query, {})
+                                llmService.mapReduceDocumentWeb(content, query, {}, onLog = { appendLog("    $it") })
                             }.getOrNull()
                             if (!extracted.isNullOrBlank()) {
                                 allFindings.add(Triple(q, result.title, extracted))
                                 val chunk = "\n• ${result.title}: $extracted"
                                 rollingContext = if (rollingContext.length + chunk.length > pageBudgetChars) {
-                                    runCatching { llmService.compressText(rollingContext + chunk, query) }.getOrNull()
+                                    runCatching { llmService.compressText(rollingContext + chunk, query) { appendLog("  [compress] $it") } }.getOrNull()
                                         ?: (rollingContext + chunk).takeLast(pageBudgetChars)
                                 } else rollingContext + chunk
                                 extracted.lines().forEach { appendLog("      $it") }
@@ -566,7 +566,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         if (rollingContext.isNotBlank()) {
                             withContext(Dispatchers.Main) { _searchStatus.value = "Checking sufficiency…" }
                             val (suf1, _) = runCatching {
-                                llmService.evaluateSufficiency(rollingContext, query)
+                                llmService.evaluateSufficiency(rollingContext, query) { appendLog("  $it") }
                             }.getOrElse { Pair(false, 0) }
                             appendLog("  Sufficiency after Stage 1: ${if (suf1) "YES" else "no"}")
                             if (suf1) sufficientEarly = true
@@ -625,14 +625,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 val host = result.displayUrl.ifBlank { result.title }.take(50)
                                 withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $host…" }
                                 val extracted = runCatching {
-                                    llmService.mapReduceDocument(content, query, {})
+                                    llmService.mapReduceDocumentWeb(content, query, {}, onLog = { appendLog("    $it") })
                                 }.getOrNull()
                                 if (!extracted.isNullOrBlank()) {
                                     allFindings.add(Triple(gapQuery, result.title, extracted))
                                     appendLog("  [$score/10] $host → extracted")
                                     val chunk = "\n• ${result.title}: $extracted"
                                     rollingContext = if (rollingContext.length + chunk.length > pageBudgetChars) {
-                                        runCatching { llmService.compressText(rollingContext + chunk, query) }.getOrNull()
+                                        runCatching { llmService.compressText(rollingContext + chunk, query) { appendLog("  [compress] $it") } }.getOrNull()
                                             ?: (rollingContext + chunk).takeLast(pageBudgetChars)
                                     } else rollingContext + chunk
                                 }
@@ -640,7 +640,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                             withContext(Dispatchers.Main) { _searchStatus.value = "Checking sufficiency (pass $pass)…" }
                             val (suf2, _) = runCatching {
-                                llmService.evaluateSufficiency(rollingContext, query)
+                                llmService.evaluateSufficiency(rollingContext, query) { appendLog("  $it") }
                             }.getOrElse { Pair(false, 0) }
                             appendLog("  Sufficiency: ${if (suf2) "YES" else "no"}")
                             if (suf2) break
@@ -683,13 +683,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                     for ((result, content) in holePages) {
                                         val extracted = runCatching {
-                                            llmService.mapReduceDocument(content, query, {})
+                                            llmService.mapReduceDocumentWeb(content, query, {}, onLog = { appendLog("    $it") })
                                         }.getOrNull()
                                         if (!extracted.isNullOrBlank()) {
                                             allFindings.add(Triple(holeQuery, result.title, extracted))
                                             val chunk = "\n• ${result.title}: $extracted"
                                             rollingContext = if (rollingContext.length + chunk.length > pageBudgetChars) {
-                                                runCatching { llmService.compressText(rollingContext + chunk, query) }.getOrNull()
+                                                runCatching { llmService.compressText(rollingContext + chunk, query) { appendLog("  [compress] $it") } }.getOrNull()
                                                     ?: (rollingContext + chunk).takeLast(pageBudgetChars)
                                             } else rollingContext + chunk
                                             appendLog("    → ${result.title.take(50)}: extracted")
@@ -871,7 +871,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             appendLog("    -> ${fullContent.length} chars — extracting…")
                             withContext(Dispatchers.Main) { _searchStatus.value = "Extracting from $displayHost…" }
                             val extracted = runCatching {
-                                llmService.mapReduceDocument(fullContent, query, {})
+                                llmService.mapReduceDocumentWeb(fullContent, query, {}, onLog = { appendLog("    $it") })
                             }.getOrNull()
                             if (!extracted.isNullOrBlank()) {
                                 allFindings.add(Triple(optimizedQuery, result.title, extracted))
@@ -887,7 +887,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 withContext(Dispatchers.Main) { _searchStatus.value = "Evaluating sufficiency…" }
                                 val gathered = allFindings.joinToString("\n") { "• ${it.second}: ${it.third}" }
                                 val (sufficient, _) = runCatching {
-                                    llmService.evaluateSufficiency(gathered, query)
+                                    llmService.evaluateSufficiency(gathered, query) { appendLog("    $it") }
                                 }.getOrElse { Pair(false, 0) }
                                 appendLog("    -> Sufficiency: ${if (sufficient) "SUFFICIENT" else "not yet"}")
                                 if (sufficient) {

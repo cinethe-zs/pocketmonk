@@ -362,15 +362,17 @@ class LlmService(private val context: Context) {
         runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().ifBlank { null } }
     }
 
-    suspend fun compressText(text: String, query: String): String? = withContext(Dispatchers.IO) {
+    suspend fun compressText(text: String, query: String, onLog: (suspend (String) -> Unit)? = null): String? = withContext(Dispatchers.IO) {
         val eng = engine ?: return@withContext null
         val prompt = buildString {
             append("<start_of_turn>user\n")
             append("Summarize the following content in 2-3 sentences. Focus only on what is relevant to: \"$query\"\n\n")
-            append(text.take(3000))
+            append(text.take(8000))
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
-        runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().ifBlank { null } }
+        val result = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().ifBlank { null } }
+        onLog?.invoke("compressText: ${text.length} → ${result?.length ?: 0} chars")
+        result
     }
 
     // ── Map-reduce for long documents ─────────────────────────────────────────
@@ -482,6 +484,164 @@ class LlmService(private val context: Context) {
         // REDUCE
         val reduced = reduce(mapped, 1)
         reduced.joinToString("\n\n---\n\n")
+    }
+
+    /**
+     * Processes a document web too large to fit in the context window using map-reduce:
+     * MAP:    split into ~7000-char chunks, extract facts relevant to [question] from each
+     * REDUCE: iteratively compress batches of extractions until they fit in 7000 chars
+     * Returns the final synthesis to use as documentContent in the chat() call.
+     *
+     * Progress format: "Analyzing section X of Y on iteration Z: chars/7000"
+     *   - Iteration 1 = MAP phase, 2+ = REDUCE passes
+     *   - chars = accumulated extracted/compressed chars so far
+     */
+    suspend fun mapReduceDocumentWeb(
+        document: String,
+        question: String,
+        onProgress: (String) -> Unit,
+        onLog: suspend (String) -> Unit = {},
+        maxOutputChars: Int = 2500,
+        onIterationBuffer: (iterIndex: Int, buffer: String) -> Unit = { _, _ -> },
+    ): String = withContext(Dispatchers.IO) {
+
+        val eng = engine ?: return@withContext ""
+        val REDUCE_THRESHOLD = 7000
+
+        suspend fun extractChunk(chunk: String): String? {
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Question: \"$question\"\n\n")
+                append("From the excerpt below, extract only the facts relevant to answering the question. ")
+                append("Be concise. If nothing is relevant, reply exactly: NONE\n\n")
+                append(chunk)
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+
+            val r = runSession(eng) {
+                it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned()
+            }
+
+            return if (r.isNullOrBlank() || r.equals("NONE", ignoreCase = true)) null else r
+        }
+
+        suspend fun compressBatch(batch: String): String? {
+            val prompt = buildString {
+                append("<start_of_turn>user\n")
+                append("Question: \"$question\"\n\n")
+                append("Synthesize the following extracted facts into a concise summary relevant to the question. ")
+                append("Keep your response under 2000 characters.\n\n")
+                append(batch)
+                append("<end_of_turn>\n<start_of_turn>model\n")
+            }
+
+            return runSession(eng) {
+                it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned().ifBlank { null }
+            }
+        }
+
+        fun packIntoBatches(parts: List<String>, maxChars: Int): List<String> {
+            val batches = mutableListOf<String>()
+            val current = StringBuilder()
+
+            for (part in parts) {
+                if (current.isNotEmpty() && current.length + part.length + 7 > maxChars) {
+                    batches.add(current.toString().trim())
+                    current.clear()
+                }
+                if (current.isNotEmpty()) current.append("\n\n---\n\n")
+                current.append(part)
+            }
+
+            if (current.isNotEmpty()) batches.add(current.toString().trim())
+            return batches
+        }
+
+        suspend fun reduce(parts: List<String>, pass: Int): List<String> {
+            val joined = parts.joinToString("\n\n---\n\n")
+            if (joined.length <= REDUCE_THRESHOLD) return parts
+
+            val batches = packIntoBatches(parts, REDUCE_THRESHOLD)
+            val compressed = mutableListOf<String>()
+
+            batches.forEachIndexed { i, batch ->
+                val currentSize = compressed.sumOf { it.length }
+
+                onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · processing...")
+
+                val r = compressBatch(batch)
+
+                if (r != null) {
+                    compressed.add(r)
+                    onLog("reduce pass $pass, batch ${i + 1}/${batches.size} → ${r.length} chars")
+                    onProgress("ANALYZE · section ${i + 1} / ${batches.size} · iter ${pass + 1} · $currentSize / $REDUCE_THRESHOLD")
+
+                    onIterationBuffer(pass, compressed.joinToString("\n\n---\n\n"))
+                }
+            }
+
+            if (compressed.isEmpty()) return listOf(parts.first())
+
+            // 🛑 Safety: stop if no improvement
+            val newJoined = compressed.joinToString("\n\n---\n\n")
+            if (newJoined.length >= joined.length) return compressed
+
+            return reduce(compressed, pass + 1)
+        }
+
+        // =========================
+        // MAP (iteration 1)
+        // =========================
+
+        val chunks = splitIntoChunks(document, REDUCE_THRESHOLD)
+        onLog("${chunks.size} chunks (doc ${document.length} chars)")
+        val mapped = mutableListOf<String>()
+        val mapBuffer = StringBuilder()
+
+        var totalChars = 0
+
+        chunks.forEachIndexed { i, chunk ->
+            onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · processing...")
+
+            val r = extractChunk(chunk)
+
+            if (r != null) {
+                if (mapBuffer.isNotEmpty()) mapBuffer.append("\n\n---\n\n")
+                mapBuffer.append(r)
+
+                mapped.add(r)
+                totalChars += r.length
+                onLog("chunk ${i + 1}/${chunks.size} → ${r.length} chars")
+                onProgress("ANALYZE · section ${i + 1} / ${chunks.size} · iter 1 · $totalChars / $REDUCE_THRESHOLD")
+
+                onIterationBuffer(0, mapBuffer.toString())
+            } else {
+                onLog("chunk ${i + 1}/${chunks.size} → NONE")
+            }
+        }
+
+        if (mapped.isEmpty()) return@withContext ""
+
+        // =========================
+        // REDUCE
+        // =========================
+
+        val reduced = reduce(mapped, 1)
+        val raw = reduced.joinToString("\n\n---\n\n")
+
+        if (raw.length > maxOutputChars) {
+            onLog("output ${raw.length} chars > cap $maxOutputChars — final compress")
+            val finalSummary = compressBatch(raw.take(maxOutputChars * 2))
+            if (finalSummary != null) {
+                onLog("final → ${finalSummary.length} chars")
+                return@withContext finalSummary
+            }
+            onLog("final → $maxOutputChars chars (truncated)")
+            return@withContext raw.take(maxOutputChars)
+        }
+
+        onLog("output: ${raw.length} chars")
+        raw
     }
 
     data class IntentResult(val intent: String, val matchedKeyword: String?)
@@ -670,7 +830,7 @@ class LlmService(private val context: Context) {
         runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().cleaned().ifBlank { null } }
     }
 
-    suspend fun evaluateSufficiency(gatheredInfo: String, question: String): Pair<Boolean, Int> =
+    suspend fun evaluateSufficiency(gatheredInfo: String, question: String, onLog: (suspend (String) -> Unit)? = null): Pair<Boolean, Int> =
         withContext(Dispatchers.IO) {
             val eng = engine ?: return@withContext Pair(false, 0)
             val prompt = buildString {
@@ -686,6 +846,7 @@ class LlmService(private val context: Context) {
             val raw = runSession(eng) { it.generateContent(listOf(InputData.Text(prompt))).trim().uppercase() }
                 ?: return@withContext Pair(false, 0)
             val sufficient = raw.startsWith("YES")
+            onLog?.invoke("[sufficiency] input ${gatheredInfo.length} chars → ${if (sufficient) "YES" else "NO"} (raw: \"${raw.take(20)}\")")
             Pair(sufficient, if (sufficient) 10 else 0)
         }
 
@@ -783,14 +944,12 @@ class LlmService(private val context: Context) {
 
     fun cancel() {
         isInferring = false
-        // Only signal cancellation — do NOT call close() here.
-        // The MessageCallback/ResponseCallback owns the lifecycle and calls close()
-        // in its onDone/onError. Calling close() from a different thread while the
-        // callback is still running causes a double-free native crash (SIGABRT).
         val conv = currentConversation; currentConversation = null
         try { conv?.cancelProcess() } catch (_: Throwable) {}
+        try { conv?.close() } catch (_: Throwable) {}
         val sess = currentSession; currentSession = null
         try { sess?.cancelProcess() } catch (_: Throwable) {}
+        try { sess?.close() } catch (_: Throwable) {}
     }
 
     fun dispose() {
