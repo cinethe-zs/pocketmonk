@@ -47,7 +47,7 @@ class LlmService(private val context: Context) {
 
     suspend fun initialize(
         modelPath: String,
-        maxTokens: Int = 2048,
+        maxTokens: Int = 4096,
     ) = withContext(Dispatchers.IO) {
         dispose()
 

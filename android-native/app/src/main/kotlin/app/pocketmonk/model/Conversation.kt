@@ -6,7 +6,7 @@ data class Conversation(
     val id: String = UUID.randomUUID().toString(),
     var title: String,
     val modelPath: String,
-    val contextSize: Int = 2048,
+    val contextSize: Int = 4096,
     val temperature: Float = 1.0f,
     var systemPrompt: String? = null,
     val tags: MutableList<String> = mutableListOf(),

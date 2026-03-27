@@ -47,13 +47,13 @@ class WebSearchService {
     suspend fun search(
         query: String,
         level: Int = 2,
-        contextSize: Int = 2048
+        contextSize: Int = 4096
     ): List<SearchResult> = withContext(Dispatchers.IO) {
         val config = levels[if (level == 0) 0 else level.coerceIn(1, 3)] ?: levels[1]!!
 
-        // Budget: 40 % of context tokens, converted to characters (~4 chars / token).
+        // Budget: 70 % of context tokens, converted to characters (~4 chars / token).
         // Levels 2/3 bypass the per-page budget — raw content is LLM-compressed later.
-        val totalBudgetChars = (contextSize * 0.40 * 4).toInt()
+        val totalBudgetChars = (contextSize * 0.60 * 4).toInt()
         val charsPerPage = when {
             config.pagesToFetch == 0 -> 0
             level == 3 -> 12000 // raw; ViewModel will LLM-compress these
