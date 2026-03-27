@@ -462,9 +462,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         return@withContext
                     }
                     val formatted = webSearchService.format(query, results)
+                    val formattedWithMeta = "$formatted\n\n[Context: ${formatted.length} chars]"
                     val searchMsg = Message(
                         role = MessageRole.USER,
-                        content = formatted,
+                        content = formattedWithMeta,
                         isSearchResult = true
                     )
                     conv.messages.add(searchMsg)

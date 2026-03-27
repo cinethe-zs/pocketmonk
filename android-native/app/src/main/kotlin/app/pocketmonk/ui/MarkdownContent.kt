@@ -37,11 +37,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.pocketmonk.ui.theme.Accent
@@ -353,9 +357,41 @@ private fun SaveFileDialog(
     )
 }
 
+private val urlLinkStyles = TextLinkStyles(
+    style = SpanStyle(color = Accent, textDecoration = TextDecoration.Underline)
+)
+
 private fun inlineSpans(text: String): AnnotatedString = buildAnnotatedString {
     var i = 0
     while (i < text.length) {
+        // Markdown link [display text](url)
+        if (text[i] == '[') {
+            val closeBracket = text.indexOf(']', i + 1)
+            if (closeBracket != -1 && closeBracket + 1 < text.length && text[closeBracket + 1] == '(') {
+                val closeParen = text.indexOf(')', closeBracket + 2)
+                if (closeParen != -1) {
+                    val linkText = text.substring(i + 1, closeBracket)
+                    val url = text.substring(closeBracket + 2, closeParen)
+                    if (url.startsWith("http://") || url.startsWith("https://")) {
+                        withLink(LinkAnnotation.Url(url, urlLinkStyles)) { append(linkText) }
+                        i = closeParen + 1
+                        continue
+                    }
+                }
+            }
+        }
+        // Bare URL https:// or http://
+        if ((i + 8 <= text.length && text.substring(i, i + 8) == "https://") ||
+            (i + 7 <= text.length && text.substring(i, i + 7) == "http://")) {
+            var end = i
+            while (end < text.length && !text[end].isWhitespace() && text[end] != ')' && text[end] != '>') end++
+            // Strip trailing punctuation that is likely not part of the URL
+            while (end > i && text[end - 1] in listOf('.', ',', ')', ']', '!', '?')) end--
+            val url = text.substring(i, end)
+            withLink(LinkAnnotation.Url(url, urlLinkStyles)) { append(url) }
+            i = end
+            continue
+        }
         // Bold **text** or __text__
         if (i + 1 < text.length && ((text[i] == '*' && text[i + 1] == '*') || (text[i] == '_' && text[i + 1] == '_'))) {
             val marker = text.substring(i, i + 2)
